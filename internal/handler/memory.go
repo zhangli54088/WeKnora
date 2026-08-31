@@ -21,11 +21,18 @@ import (
 // class of "can I read another user's memories by changing an id" bugs instead
 // of relying on a per-route ownership check.
 type MemoryHandler struct {
-	memoryService interfaces.MemoryService
+	memoryService     interfaces.MemoryService
+	memoryWikiService interfaces.MemoryWikiService
 }
 
-func NewMemoryHandler(memoryService interfaces.MemoryService) *MemoryHandler {
-	return &MemoryHandler{memoryService: memoryService}
+func NewMemoryHandler(
+	memoryService interfaces.MemoryService,
+	memoryWikiService interfaces.MemoryWikiService,
+) *MemoryHandler {
+	return &MemoryHandler{
+		memoryService:     memoryService,
+		memoryWikiService: memoryWikiService,
+	}
 }
 
 // GetSettings godoc
@@ -444,6 +451,80 @@ func (h *MemoryHandler) Consolidate(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": result})
 }
 
+type memoryWikiCandidatesRequest struct {
+	KnowledgeBaseID string `json:"knowledge_base_id"`
+	TopK            int    `json:"top_k"`
+}
+
+// FindWikiCandidates returns Wiki pages supported by semantic KB retrieval
+// evidence for one of the caller's memories.
+func (h *MemoryHandler) FindWikiCandidates(c *gin.Context) {
+	var req memoryWikiCandidatesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(apperrors.NewValidationError("Invalid request data").WithDetails(err.Error()))
+		return
+	}
+	if req.KnowledgeBaseID == "" {
+		c.Error(apperrors.NewBadRequestError("knowledge_base_id is required"))
+		return
+	}
+	candidates, err := h.memoryWikiService.FindCandidates(
+		c.Request.Context(), c.Param("id"), req.KnowledgeBaseID, req.TopK,
+	)
+	if err != nil {
+		h.fail(c, err, "Failed to find Wiki candidates")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": candidates})
+}
+
+type upsertMemoryWikiLinkRequest struct {
+	WikiPageID string  `json:"wiki_page_id"`
+	Score      float64 `json:"score"`
+	Method     string  `json:"method"`
+}
+
+// UpsertWikiLink confirms and persists one MemoryItem-to-WikiPage relation.
+func (h *MemoryHandler) UpsertWikiLink(c *gin.Context) {
+	var req upsertMemoryWikiLinkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(apperrors.NewValidationError("Invalid request data").WithDetails(err.Error()))
+		return
+	}
+	if req.WikiPageID == "" {
+		c.Error(apperrors.NewBadRequestError("wiki_page_id is required"))
+		return
+	}
+	view, err := h.memoryWikiService.UpsertLink(
+		c.Request.Context(), c.Param("id"), req.WikiPageID, req.Score, req.Method,
+	)
+	if err != nil {
+		h.fail(c, err, "Failed to save Memory-Wiki link")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": view})
+}
+
+// ListWikiLinks returns every confirmed relation for the current principal in
+// the current tenant. Neither scope component is accepted from the client.
+func (h *MemoryHandler) ListWikiLinks(c *gin.Context) {
+	views, err := h.memoryWikiService.ListLinks(c.Request.Context())
+	if err != nil {
+		h.fail(c, err, "Failed to list Memory-Wiki links")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": views})
+}
+
+// DeleteWikiLink removes one relation inside the caller's resolved scope.
+func (h *MemoryHandler) DeleteWikiLink(c *gin.Context) {
+	if err := h.memoryWikiService.DeleteLink(c.Request.Context(), c.Param("id")); err != nil {
+		h.fail(c, err, "Failed to delete Memory-Wiki link")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
 // fail maps service errors onto HTTP responses. A missing item and an item
 // belonging to someone else produce the same 404 on purpose.
 func (h *MemoryHandler) fail(c *gin.Context, err error, message string) {
@@ -452,6 +533,14 @@ func (h *MemoryHandler) fail(c *gin.Context, err error, message string) {
 		c.Error(apperrors.NewUnauthorizedError("no principal in request"))
 	case errors.Is(err, memory.ErrItemNotFound):
 		c.Error(apperrors.NewNotFoundError("memory not found"))
+	case errors.Is(err, memory.ErrMemoryWikiKnowledgeBaseNotFound):
+		c.Error(apperrors.NewNotFoundError("knowledge base not found"))
+	case errors.Is(err, memory.ErrMemoryWikiPageNotFound):
+		c.Error(apperrors.NewNotFoundError("wiki page not found"))
+	case errors.Is(err, memory.ErrMemoryWikiLinkNotFound):
+		c.Error(apperrors.NewNotFoundError("memory wiki link not found"))
+	case errors.Is(err, memory.ErrMemoryWikiDisabled):
+		c.Error(apperrors.NewBadRequestError("wiki is not enabled for knowledge base"))
 	case errors.Is(err, memory.ErrMemoryDisabled):
 		c.Error(apperrors.NewBadRequestError("memory is disabled"))
 	default:
