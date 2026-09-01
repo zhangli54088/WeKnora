@@ -81,6 +81,9 @@ func TestMemoryWikiRepositoryTenantAndSubjectIsolation(t *testing.T) {
 	linksA, err := repo.ListLinks(t.Context(), scopeA)
 	require.NoError(t, err)
 	require.Empty(t, linksA)
+	foreignLink, err := repo.GetLink(t.Context(), scopeA, linkB.ID)
+	require.NoError(t, err)
+	require.Nil(t, foreignLink)
 
 	_, err = repo.UpsertLink(t.Context(), scopeA, &types.MemoryWikiLink{
 		MemoryItemID: "memory-b", WikiPageID: "page-b", KnowledgeBaseID: "kb-b",

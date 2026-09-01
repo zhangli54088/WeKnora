@@ -102,6 +102,25 @@ func (r *memoryWikiRepository) ListLinks(
 	return links, err
 }
 
+func (r *memoryWikiRepository) GetLink(
+	ctx context.Context, scope interfaces.MemoryScope, id string,
+) (*types.MemoryWikiLink, error) {
+	if !scope.Valid() || id == "" {
+		return nil, nil
+	}
+	var link types.MemoryWikiLink
+	err := r.db.WithContext(ctx).Where(
+		"id = ? AND tenant_id = ? AND subject_id = ?", id, scope.TenantID, scope.SubjectID,
+	).First(&link).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &link, nil
+}
+
 func (r *memoryWikiRepository) DeleteLink(
 	ctx context.Context, scope interfaces.MemoryScope, id string,
 ) (bool, error) {

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -37,6 +38,7 @@ type memoryWikiService struct {
 	memoryRepo interfaces.MemoryRepository
 	linkRepo   interfaces.MemoryWikiRepository
 	kbService  interfaces.KnowledgeBaseService
+	profile    interfaces.LearningProfileService
 }
 
 type memoryWikiEvidence struct {
@@ -50,11 +52,13 @@ func NewMemoryWikiService(
 	memoryRepo interfaces.MemoryRepository,
 	linkRepo interfaces.MemoryWikiRepository,
 	kbService interfaces.KnowledgeBaseService,
+	profile interfaces.LearningProfileService,
 ) interfaces.MemoryWikiService {
 	return &memoryWikiService{
 		memoryRepo: memoryRepo,
 		linkRepo:   linkRepo,
 		kbService:  kbService,
+		profile:    profile,
 	}
 }
 
@@ -303,6 +307,9 @@ func (s *memoryWikiService) UpsertLink(
 		}
 		return nil, err
 	}
+	if err := s.profile.SyncMemoryWikiLink(ctx, link); err != nil {
+		return nil, fmt.Errorf("sync memory wiki learning evidence: %w", err)
+	}
 	return &types.MemoryWikiLinkView{
 		Link: link, MemoryItem: item, WikiPage: memoryWikiPageRef(page),
 	}, nil
@@ -354,6 +361,18 @@ func (s *memoryWikiService) DeleteLink(ctx context.Context, id string) error {
 	scope, err := ResolveScope(ctx)
 	if err != nil {
 		return err
+	}
+	link, err := s.linkRepo.GetLink(ctx, scope, id)
+	if err != nil {
+		return err
+	}
+	if link == nil {
+		return ErrMemoryWikiLinkNotFound
+	}
+	// Evidence/state are cleaned first so a link-delete failure remains fully
+	// retryable: the still-present scoped link lets the next call recompute.
+	if err := s.profile.RemoveMemoryWikiLinkEvidence(ctx, link); err != nil {
+		return fmt.Errorf("remove memory wiki learning evidence: %w", err)
 	}
 	deleted, err := s.linkRepo.DeleteLink(ctx, scope, id)
 	if err != nil {

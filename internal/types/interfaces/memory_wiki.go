@@ -10,6 +10,7 @@ import (
 // operation receives the already-resolved memory scope explicitly.
 type MemoryWikiRepository interface {
 	UpsertLink(ctx context.Context, scope MemoryScope, link *types.MemoryWikiLink) (*types.MemoryWikiLink, error)
+	GetLink(ctx context.Context, scope MemoryScope, id string) (*types.MemoryWikiLink, error)
 	ListLinks(ctx context.Context, scope MemoryScope) ([]*types.MemoryWikiLink, error)
 	DeleteLink(ctx context.Context, scope MemoryScope, id string) (bool, error)
 	GetWikiPage(ctx context.Context, tenantID uint64, knowledgeBaseID, pageID string) (*types.WikiPage, error)

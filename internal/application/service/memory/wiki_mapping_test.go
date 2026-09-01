@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -50,6 +51,8 @@ func (s *memoryWikiKBServiceStub) HybridSearch(
 type memoryWikiLinkRepoStub struct {
 	interfaces.MemoryWikiRepository
 	pages map[string][]*types.WikiPage
+	page  *types.WikiPage
+	link  *types.MemoryWikiLink
 }
 
 func (s *memoryWikiLinkRepoStub) ListWikiPagesBySourceRefs(
@@ -60,6 +63,69 @@ func (s *memoryWikiLinkRepoStub) ListWikiPagesBySourceRefs(
 		pages = append(pages, s.pages[knowledgeID]...)
 	}
 	return pages, nil
+}
+
+func (s *memoryWikiLinkRepoStub) GetWikiPage(
+	_ context.Context, tenantID uint64, knowledgeBaseID, pageID string,
+) (*types.WikiPage, error) {
+	if s.page == nil || s.page.ID != pageID || s.page.TenantID != tenantID ||
+		knowledgeBaseID != "" && s.page.KnowledgeBaseID != knowledgeBaseID {
+		return nil, nil
+	}
+	return s.page, nil
+}
+
+func (s *memoryWikiLinkRepoStub) UpsertLink(
+	_ context.Context, scope interfaces.MemoryScope, link *types.MemoryWikiLink,
+) (*types.MemoryWikiLink, error) {
+	link.ID = "link-1"
+	link.TenantID = scope.TenantID
+	link.SubjectID = scope.SubjectID
+	link.CreatedAt = time.Now()
+	link.UpdatedAt = link.CreatedAt
+	s.link = link
+	return link, nil
+}
+
+func (s *memoryWikiLinkRepoStub) GetLink(
+	_ context.Context, scope interfaces.MemoryScope, id string,
+) (*types.MemoryWikiLink, error) {
+	if s.link == nil || s.link.ID != id || s.link.TenantID != scope.TenantID ||
+		s.link.SubjectID != scope.SubjectID {
+		return nil, nil
+	}
+	return s.link, nil
+}
+
+func (s *memoryWikiLinkRepoStub) DeleteLink(
+	_ context.Context, scope interfaces.MemoryScope, id string,
+) (bool, error) {
+	if s.link == nil || s.link.ID != id || s.link.TenantID != scope.TenantID ||
+		s.link.SubjectID != scope.SubjectID {
+		return false, nil
+	}
+	s.link = nil
+	return true, nil
+}
+
+type memoryWikiProfileStub struct {
+	interfaces.LearningProfileService
+	synced  *types.MemoryWikiLink
+	removed *types.MemoryWikiLink
+}
+
+func (s *memoryWikiProfileStub) SyncMemoryWikiLink(
+	_ context.Context, link *types.MemoryWikiLink,
+) error {
+	s.synced = link
+	return nil
+}
+
+func (s *memoryWikiProfileStub) RemoveMemoryWikiLinkEvidence(
+	_ context.Context, link *types.MemoryWikiLink,
+) error {
+	s.removed = link
+	return nil
 }
 
 func memoryWikiTestContext(t *testing.T, tenantID uint64, userID string) context.Context {
@@ -88,6 +154,7 @@ func newMemoryWikiCandidateService(
 		memoryRepo: memoryRepo,
 		linkRepo:   &memoryWikiLinkRepoStub{pages: pages},
 		kbService:  kbService,
+		profile:    &memoryWikiProfileStub{},
 	}, kbService
 }
 
@@ -155,4 +222,29 @@ func TestMemoryWikiCandidatesRejectCrossTenantKB(t *testing.T) {
 
 	_, err := svc.FindCandidates(memoryWikiTestContext(t, 1, "alice"), "memory-1", "kb-1", 5)
 	require.ErrorIs(t, err, ErrMemoryWikiKnowledgeBaseNotFound)
+}
+
+func TestMemoryWikiLinkSynchronizesAndRemovesLearningProfile(t *testing.T) {
+	svc, _ := newMemoryWikiCandidateService(nil, nil)
+	repo := svc.linkRepo.(*memoryWikiLinkRepoStub)
+	repo.page = &types.WikiPage{
+		ID: "page-a", TenantID: 1, KnowledgeBaseID: "kb-1",
+		Title: "RAG", Slug: "concept/rag", Status: types.WikiPageStatusPublished,
+	}
+	profile := svc.profile.(*memoryWikiProfileStub)
+	ctx := memoryWikiTestContext(t, 1, "alice")
+
+	view, err := svc.UpsertLink(
+		ctx, "memory-1", "page-a", 0.0155, types.MemoryWikiMethodChunkRef,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, view)
+	require.NotNil(t, profile.synced)
+	require.Equal(t, "link-1", profile.synced.ID)
+	require.Equal(t, 0.0155, profile.synced.Score)
+
+	require.NoError(t, svc.DeleteLink(ctx, "link-1"))
+	require.NotNil(t, profile.removed)
+	require.Equal(t, "link-1", profile.removed.ID)
+	require.Nil(t, repo.link)
 }

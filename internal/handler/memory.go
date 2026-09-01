@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,15 +24,18 @@ import (
 type MemoryHandler struct {
 	memoryService     interfaces.MemoryService
 	memoryWikiService interfaces.MemoryWikiService
+	learningProfile   interfaces.LearningProfileService
 }
 
 func NewMemoryHandler(
 	memoryService interfaces.MemoryService,
 	memoryWikiService interfaces.MemoryWikiService,
+	learningProfile interfaces.LearningProfileService,
 ) *MemoryHandler {
 	return &MemoryHandler{
 		memoryService:     memoryService,
 		memoryWikiService: memoryWikiService,
+		learningProfile:   learningProfile,
 	}
 }
 
@@ -523,6 +527,42 @@ func (h *MemoryHandler) DeleteWikiLink(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ListLearningEvidence returns auditable evidence for the authenticated
+// principal. An optional WikiPage filter never changes the caller's scope.
+func (h *MemoryHandler) ListLearningEvidence(c *gin.Context) {
+	wikiPageID, present := c.GetQuery("wiki_page_id")
+	if present && strings.TrimSpace(wikiPageID) == "" {
+		c.Error(apperrors.NewBadRequestError("wiki_page_id cannot be empty"))
+		return
+	}
+	evidence, err := h.learningProfile.ListEvidence(
+		c.Request.Context(), strings.TrimSpace(wikiPageID),
+	)
+	if err != nil {
+		h.fail(c, err, "Failed to list learning evidence")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": evidence})
+}
+
+// ListKnowledgeStates returns only materialized states; WikiPages without
+// evidence remain implicit unknowns and are not expanded into rows.
+func (h *MemoryHandler) ListKnowledgeStates(c *gin.Context) {
+	knowledgeBaseID, present := c.GetQuery("knowledge_base_id")
+	if present && strings.TrimSpace(knowledgeBaseID) == "" {
+		c.Error(apperrors.NewBadRequestError("knowledge_base_id cannot be empty"))
+		return
+	}
+	states, err := h.learningProfile.ListKnowledgeStates(
+		c.Request.Context(), strings.TrimSpace(knowledgeBaseID),
+	)
+	if err != nil {
+		h.fail(c, err, "Failed to list knowledge states")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": states})
 }
 
 // fail maps service errors onto HTTP responses. A missing item and an item
