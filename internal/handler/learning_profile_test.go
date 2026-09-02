@@ -37,6 +37,12 @@ func (s *learningProfileHandlerServiceFake) SyncMemoryWikiLink(
 	return nil
 }
 
+func (s *learningProfileHandlerServiceFake) RecordChatInteractions(
+	context.Context, string, string, string, []*types.MemoryWikiCandidate,
+) error {
+	return nil
+}
+
 func (s *learningProfileHandlerServiceFake) RemoveMemoryWikiLinkEvidence(
 	context.Context, *types.MemoryWikiLink,
 ) error {

@@ -61,6 +61,12 @@ func (s *memoryWikiHandlerServiceFake) FindCandidates(
 	return s.findResult, s.findErr
 }
 
+func (s *memoryWikiHandlerServiceFake) FindCandidatesForText(
+	context.Context, string, string, int,
+) ([]*types.MemoryWikiCandidate, error) {
+	return s.findResult, s.findErr
+}
+
 func (s *memoryWikiHandlerServiceFake) UpsertLink(
 	ctx context.Context, memoryItemID, wikiPageID string, score float64, method string,
 ) (*types.MemoryWikiLinkView, error) {
