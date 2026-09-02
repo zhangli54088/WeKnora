@@ -1,12 +1,51 @@
 <template>
   <div class="wiki-browser">
     <!-- Graph view (full screen) -->
-    <template v-if="view === 'graph'">
+    <template v-if="view === 'graph' || view === 'profile'">
       <div class="wiki-graph">
         <div ref="graphRef" class="wiki-graph-canvas"></div>
 
+        <div v-if="isPersonalProfile" class="personal-profile-panel">
+          <div class="personal-profile-heading">
+            <div>
+              <div class="personal-profile-title">{{ $t('knowledgeEditor.wikiBrowser.profileTitle') }}</div>
+              <div class="personal-profile-updated">
+                {{ $t('knowledgeEditor.wikiBrowser.profileLastUpdated') }}: {{ personalLastUpdated ? formatDate(personalLastUpdated) : '-' }}
+              </div>
+            </div>
+            <t-button size="small" variant="outline" :loading="personalStatesLoading" @click="refreshPersonalProfile">
+              <template #icon><t-icon name="refresh" /></template>
+              {{ $t('knowledgeEditor.wikiBrowser.profileRefresh') }}
+            </t-button>
+          </div>
+          <div class="personal-profile-counts">
+            <span>{{ $t('knowledgeEditor.wikiBrowser.profileLit') }} <strong>{{ personalSummary.lit }}</strong></span>
+            <span>{{ $t('knowledgeEditor.wikiBrowser.statusExposed') }} <strong>{{ personalSummary.exposed }}</strong></span>
+            <span>{{ $t('knowledgeEditor.wikiBrowser.statusFamiliar') }} <strong>{{ personalSummary.familiar }}</strong></span>
+            <span>{{ $t('knowledgeEditor.wikiBrowser.statusMastered') }} <strong>{{ personalSummary.mastered }}</strong></span>
+            <span>{{ $t('knowledgeEditor.wikiBrowser.profileEvidenceTitle') }} <strong>{{ personalSummary.evidence }}</strong></span>
+          </div>
+          <div class="personal-profile-filters">
+            <t-input v-model="personalFilters.query" clearable size="small"
+              :placeholder="$t('knowledgeEditor.wikiBrowser.profileSearch')">
+              <template #prefix-icon><t-icon name="search" /></template>
+            </t-input>
+            <t-select v-model="personalFilters.status" size="small" :options="personalStatusOptions" />
+            <label class="personal-profile-switch"><t-switch v-model="personalFilters.litOnly" size="small" />{{ $t('knowledgeEditor.wikiBrowser.profileLitOnly') }}</label>
+            <label class="personal-profile-switch"><t-switch v-model="personalFilters.includeContext" size="small" :disabled="!personalFilters.litOnly" />{{ $t('knowledgeEditor.wikiBrowser.profileIncludeContext') }}</label>
+            <label class="personal-profile-switch"><t-switch v-model="personalDebug" size="small" />{{ $t('knowledgeEditor.wikiBrowser.profileTechnical') }}</label>
+          </div>
+          <div v-if="personalStatesError" class="personal-profile-error">
+            {{ $t('knowledgeEditor.wikiBrowser.profileLoadFailed') }}
+            <t-link theme="primary" @click="refreshPersonalProfile">{{ $t('common.retry') }}</t-link>
+          </div>
+          <div v-else-if="!personalStatesLoading && personalSummary.lit === 0" class="personal-profile-empty">
+            {{ $t('knowledgeEditor.wikiBrowser.profileNoEvidence') }}
+          </div>
+        </div>
+
         <!-- Graph Search Overlay -->
-        <div v-if="graphReady" class="wiki-graph-search-container">
+        <div v-if="graphReady && !isPersonalProfile" class="wiki-graph-search-container">
           <div class="wiki-graph-search-row">
             <div class="wiki-graph-search">
               <t-select v-model="graphSearchValue" filterable :options="graphSearchEffectiveOptions"
@@ -48,7 +87,13 @@
 
         <!-- Legend Overlay -->
         <div v-if="graphReady" class="wiki-graph-legend" :class="{ 'legend-shifted': graphDrawerVisible }">
-          <div class="legend-items">
+          <div v-if="isPersonalProfile" class="legend-items">
+            <div class="legend-item"><span class="legend-status legend-status--unknown">○</span>{{ $t('knowledgeEditor.wikiBrowser.statusUnknown') }}</div>
+            <div class="legend-item"><span class="legend-status legend-status--exposed">◐</span>{{ $t('knowledgeEditor.wikiBrowser.statusExposed') }}</div>
+            <div class="legend-item"><span class="legend-status legend-status--familiar">●</span>{{ $t('knowledgeEditor.wikiBrowser.statusFamiliar') }}</div>
+            <div class="legend-item"><span class="legend-status legend-status--mastered">★</span>{{ $t('knowledgeEditor.wikiBrowser.statusMastered') }}</div>
+          </div>
+          <div v-else class="legend-items">
             <div class="legend-item clickable" :class="{ disabled: !graphFilterTypes.has('summary') }"
               @click="toggleGraphFilterType('summary')">
               <span class="legend-dot" style="background: #0052d9"></span>
@@ -131,6 +176,51 @@
           :footer="false" placement="right" :show-overlay="false" :close-btn="true" destroy-on-close
           class="wiki-graph-drawer">
           <template v-if="graphDrawerPage">
+            <section v-if="isPersonalProfile" class="personal-evidence-summary">
+              <div class="personal-evidence-status-row">
+                <t-tag :theme="knowledgeStatusTheme(selectedKnowledgeState?.status || 'unknown')" variant="light">
+                  {{ knowledgeStatusLabel(selectedKnowledgeState?.status || 'unknown') }}
+                </t-tag>
+                <span>{{ $t('knowledgeEditor.wikiBrowser.profileEvidenceCount') }}: {{ selectedKnowledgeState?.evidence_count || 0 }}</span>
+              </div>
+              <div class="personal-evidence-state-grid">
+                <span>{{ $t('knowledgeEditor.wikiBrowser.profileConfidence') }}</span><strong>{{ selectedKnowledgeState?.confidence ?? 0 }}</strong>
+                <span>{{ $t('knowledgeEditor.wikiBrowser.profileLastEvidence') }}</span><strong>{{ selectedKnowledgeState?.last_evidence_at ? formatDate(selectedKnowledgeState.last_evidence_at) : '-' }}</strong>
+              </div>
+              <div v-if="personalDebug" class="personal-technical-grid">
+                <span>wiki_page_id</span><code>{{ graphDrawerPage.id }}</code>
+                <span>knowledge_base_id</span><code>{{ graphDrawerPage.knowledge_base_id }}</code>
+                <span>state_id</span><code>{{ selectedKnowledgeState?.id || '-' }}</code>
+              </div>
+              <t-divider>{{ $t('knowledgeEditor.wikiBrowser.profileEvidenceTitle') }}</t-divider>
+              <div v-if="personalEvidenceLoading" class="personal-evidence-loading"><t-loading size="small" /></div>
+              <div v-else-if="personalEvidenceError" class="personal-profile-error">
+                {{ $t('knowledgeEditor.wikiBrowser.profileEvidenceFailed') }}
+                <t-link theme="primary" @click="loadSelectedEvidence">{{ $t('common.retry') }}</t-link>
+              </div>
+              <div v-else-if="personalEvidence.length === 0" class="personal-profile-empty">
+                {{ $t('knowledgeEditor.wikiBrowser.profileNoNodeEvidence') }}
+              </div>
+              <div v-else class="personal-evidence-list">
+                <article v-for="item in personalEvidence" :key="item.id" class="personal-evidence-item">
+                  <div class="personal-evidence-item-head">
+                    <strong>{{ evidenceTypeLabel(item.evidence_type) }}</strong>
+                    <t-tag size="small" variant="light">{{ item.level }}</t-tag>
+                  </div>
+                  <div class="personal-evidence-item-meta">
+                    <span>{{ formatDate(item.occurred_at) }}</span><span>weight {{ item.weight }}</span>
+                  </div>
+                  <div v-if="personalDebug" class="personal-technical-grid">
+                    <span>evidence_id</span><code>{{ item.id }}</code>
+                    <span>source_type</span><code>{{ item.source_type }}</code>
+                    <span>source_id</span><code>{{ item.source_id }}</code>
+                    <template v-for="entry in technicalMetadataEntries(item.metadata)" :key="entry[0]">
+                      <span>{{ entry[0] }}</span><code>{{ entry[1] }}</code>
+                    </template>
+                  </div>
+                </article>
+              </div>
+            </section>
             <div class="wiki-reader-meta" style="margin-bottom: 8px;">
               <t-tag size="small" :theme="getTypeTheme(graphDrawerPage.page_type)" variant="light-outline">
                 {{ getTypeLabel(graphDrawerPage.page_type) }}
@@ -804,6 +894,8 @@ import type { ProtectedFileAccessContext } from '@/utils/protectedFileAccess'
 import picturePreview from '@/components/picture-preview.vue'
 import WikiFolderActions from './WikiFolderActions.vue'
 import WikiRevisionDrawer from './WikiRevisionDrawer.vue'
+import { listKnowledgeStates, listLearningEvidence, type KnowledgeStatus, type LearningEvidence, type UserKnowledgeState } from '@/api/memory'
+import { filterPersonalKnowledgeGraph, mergePersonalKnowledgeGraph, summarizeKnowledgeStates } from './personalLearningGraph'
 import {
   expandedWikiDirectoryPaths,
   expandWikiDirectoryPath,
@@ -846,7 +938,7 @@ const { t } = useI18n()
 
 const props = defineProps<{
   knowledgeBaseId: string
-  view?: 'browser' | 'graph'
+  view?: 'browser' | 'graph' | 'profile'
   // canEdit 由父组件 KnowledgeBase.vue 透传（与 canEdit computed 同源）。
   // 控制 AutoFix / FixIssue / IgnoreIssue 三个写操作按钮的可见性，
   // 对应后端 g.OwnedWikiKBOrAdmin() 守卫（KB creator OR Admin+ OR
@@ -984,6 +1076,32 @@ const globalIssues = ref<WikiPageIssue[]>([])
 const currentFixSessionId = ref('')
 const stats = ref<WikiStats | null>(null)
 const graphData = ref<WikiGraphData | null>(null)
+const isPersonalProfile = computed(() => props.view === 'profile')
+const personalStates = ref<UserKnowledgeState[]>([])
+const personalStatesLoading = ref(false)
+const personalStatesError = ref(false)
+const personalLastUpdated = ref('')
+const personalDebug = ref(false)
+const personalEvidence = ref<LearningEvidence[]>([])
+const personalEvidenceLoading = ref(false)
+const personalEvidenceError = ref(false)
+const personalFilters = reactive({
+  query: '',
+  status: 'all' as KnowledgeStatus | 'all',
+  litOnly: false,
+  includeContext: false,
+})
+const personalStatusOptions = computed(() => [
+  { value: 'all', label: t('knowledgeEditor.wikiBrowser.statusAll') },
+  { value: 'unknown', label: t('knowledgeEditor.wikiBrowser.statusUnknown') },
+  { value: 'exposed', label: t('knowledgeEditor.wikiBrowser.statusExposed') },
+  { value: 'familiar', label: t('knowledgeEditor.wikiBrowser.statusFamiliar') },
+  { value: 'mastered', label: t('knowledgeEditor.wikiBrowser.statusMastered') },
+])
+const personalNodes = computed(() => graphData.value
+  ? mergePersonalKnowledgeGraph(graphData.value, personalStates.value)
+  : [])
+const personalSummary = computed(() => summarizeKnowledgeStates(personalNodes.value))
 const searchQuery = ref('')
 const graphSearchValue = ref('')
 const graphRef = ref<HTMLElement | null>(null)
@@ -993,6 +1111,72 @@ const loading = ref(false)
 const graphLoading = ref(false)
 const graphReady = ref(false)
 const showArrows = ref(true)
+
+async function loadPersonalStates() {
+  if (!isPersonalProfile.value || !props.knowledgeBaseId) return
+  personalStatesLoading.value = true
+  personalStatesError.value = false
+  try {
+    const response = await listKnowledgeStates(props.knowledgeBaseId)
+    personalStates.value = response.data || []
+    personalLastUpdated.value = new Date().toISOString()
+  } catch (error) {
+    console.error('Failed to load personal knowledge states:', error)
+    personalStatesError.value = true
+  } finally {
+    personalStatesLoading.value = false
+  }
+}
+
+async function refreshPersonalProfile() {
+  await loadPersonalStates()
+  renderGraph({ preserveLayout: true })
+  if (graphDrawerPage.value) await loadSelectedEvidence()
+}
+
+async function loadSelectedEvidence() {
+  const pageID = graphDrawerPage.value?.id
+  if (!pageID || !isPersonalProfile.value) return
+  personalEvidenceLoading.value = true
+  personalEvidenceError.value = false
+  try {
+    const response = await listLearningEvidence(pageID)
+    personalEvidence.value = response.data || []
+  } catch (error) {
+    console.error(`Failed to load learning evidence for ${pageID}:`, error)
+    personalEvidenceError.value = true
+    personalEvidence.value = []
+  } finally {
+    personalEvidenceLoading.value = false
+  }
+}
+
+function knowledgeStatusLabel(status: KnowledgeStatus) {
+  return t(`knowledgeEditor.wikiBrowser.status${status.charAt(0).toUpperCase()}${status.slice(1)}`)
+}
+
+function knowledgeStatusTheme(status: KnowledgeStatus): 'default' | 'primary' | 'success' | 'warning' {
+  if (status === 'exposed') return 'primary'
+  if (status === 'familiar' || status === 'mastered') return 'success'
+  return 'default'
+}
+
+function evidenceTypeLabel(type: string) {
+  if (type === 'chat_interaction') return t('knowledgeEditor.wikiBrowser.evidenceChat')
+  if (type === 'memory_link') return t('knowledgeEditor.wikiBrowser.evidenceMemory')
+  return type
+}
+
+function technicalMetadataEntries(metadata: Record<string, unknown> | null | undefined): [string, string][] {
+  if (!metadata) return []
+  const allowed = new Set([
+    'message_id', 'session_id', 'knowledge_base_id', 'mapping_method', 'mapping_score',
+    'rank', 'memory_item_id', 'matched_chunk_id',
+  ])
+  return Object.entries(metadata)
+    .filter(([key]) => allowed.has(key))
+    .map(([key, value]) => [key, String(value)] as [string, string])
+}
 
 // Graph filtering
 const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index']))
@@ -1022,7 +1206,7 @@ watch(showGlobalIssuesDrawer, async (val) => {
 
 async function navigateToSlugAndFix(slug: string) {
   showGlobalIssuesDrawer.value = false
-  if (props.view === 'graph') {
+  if (props.view === 'graph' || props.view === 'profile') {
     handleGraphSearchSelect(slug)
   } else {
     await navigateToSlug(slug)
@@ -1138,6 +1322,10 @@ function fitGraphToView() {
 
 const graphDrawerVisible = ref(false)
 const graphDrawerPage = ref<WikiPage | null>(null)
+const selectedKnowledgeState = computed(() => {
+  const pageID = graphDrawerPage.value?.id
+  return pageID ? personalStates.value.find(state => state.wiki_page_id === pageID) : undefined
+})
 const navHistory = ref<WikiPage[]>([])
 // navFromSystemView remembers that the user was viewing the Index when they
 // clicked into a slug, so goBack can restore it
@@ -1540,6 +1728,9 @@ async function openGraphDrawer(slug: string) {
     const res = await getWikiPage(props.knowledgeBaseId, slug)
     graphDrawerPage.value = (res as any).data || res as any
     graphDrawerVisible.value = true
+    personalEvidence.value = []
+    personalEvidenceError.value = false
+    if (isPersonalProfile.value) await loadSelectedEvidence()
   } catch (e) {
     console.error(`Failed to load page ${slug}:`, e)
   }
@@ -2884,7 +3075,7 @@ async function loadStats() {
       // Also refresh the currently opened page (right panel) so users see updated content
       refreshSelectedPage()
       // If currently viewing the graph, reload it as well so new nodes/edges show up
-      if (props.view === 'graph') {
+      if (props.view === 'graph' || props.view === 'profile') {
         loadGraph()
       }
     }
@@ -3172,6 +3363,7 @@ async function loadGraph() {
       types: graphFilterTypesToArray(),
     })
     graphData.value = (res as any).data || res as any
+    if (isPersonalProfile.value) await loadPersonalStates()
     // Seed the search dropdown's empty-state with this overview snapshot
     // so opening the select without typing shows the top-500 by link_count
     // — matching what the old client-filter dropdown used to surface.
@@ -3225,6 +3417,7 @@ async function loadEgoGraph(slug: string, depth = GRAPH_EGO_DEFAULT_DEPTH) {
       types: graphFilterTypesToArray(),
     })
     graphData.value = (res as any).data || res as any
+    if (isPersonalProfile.value) await loadPersonalStates()
     graphMode.value = 'ego'
     graphCenter.value = slug
     // Entering (or re-entering) a fresh ego view resets the bloom
@@ -3709,9 +3902,10 @@ function slugDisplayName(slug: string): string {
 
 interface GNode {
   x: number; y: number; vx: number; vy: number
-  slug: string; title: string; type: string
+  id: string; knowledgeBaseID: string; slug: string; title: string; type: string
   linkCount: number; pinned: boolean
   familiar: boolean
+  learningStatus: KnowledgeStatus
 }
 
 // Persistent graph state so it survives re-renders
@@ -3740,6 +3934,19 @@ const nodeColorMap: Record<string, string> = {
   synthesis: '#0594fa', comparison: '#d54941', index: '#8c8c8c',
 }
 
+const learningStatusColorMap: Record<KnowledgeStatus, string> = {
+  unknown: 'var(--td-text-color-placeholder)',
+  exposed: 'var(--td-brand-color)',
+  familiar: 'var(--td-success-color)',
+  mastered: 'var(--td-success-color-active)',
+}
+
+function graphNodeColor(node: Pick<GNode, 'type' | 'learningStatus'>) {
+  return isPersonalProfile.value
+    ? learningStatusColorMap[node.learningStatus]
+    : (nodeColorMap[node.type] || 'var(--td-text-color-placeholder)')
+}
+
 // RenderGraphOpts tweaks how renderGraph initializes node positions when
 // repainting the canvas. The default (no opts) does a full layout reset —
 // every node gets a fresh circular starting position and the force
@@ -3764,7 +3971,22 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     container.innerHTML = ''
     return
   }
-  const graph = data
+  let graph = data
+  let renderedPersonalNodes = personalNodes.value
+  if (isPersonalProfile.value) {
+    const visible = filterPersonalKnowledgeGraph(renderedPersonalNodes, data.edges, personalFilters)
+    renderedPersonalNodes = renderedPersonalNodes.filter(node => visible.has(node.slug))
+    graph = {
+      ...data,
+      nodes: renderedPersonalNodes,
+      edges: data.edges.filter(edge => visible.has(edge.source) && visible.has(edge.target)),
+    }
+    if (renderedPersonalNodes.length === 0) {
+      container.innerHTML = ''
+      graphReady.value = true
+      return
+    }
+  }
 
   // Stop any previous animation
   if (graphAnimFrame) { cancelAnimationFrame(graphAnimFrame); graphAnimFrame = 0 }
@@ -3861,9 +4083,13 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     }
     const node: GNode = {
       x, y, vx, vy,
+      id: n.id, knowledgeBaseID: n.knowledge_base_id,
       slug: n.slug, title: n.title, type: n.page_type,
       linkCount: n.link_count || 0, pinned,
       familiar: !!n.familiar,
+      learningStatus: isPersonalProfile.value
+        ? (renderedPersonalNodes.find(item => item.id === n.id)?.learning_status || 'unknown')
+        : 'unknown',
     }
     nodeMap.set(n.slug, node)
     return node
@@ -3997,7 +4223,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     const expansionRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
     expansionRing.setAttribute('r', String(r + 3))
     expansionRing.setAttribute('fill', 'none')
-    expansionRing.setAttribute('stroke', nodeColorMap[n.type] || '#8c8c8c')
+    expansionRing.setAttribute('stroke', graphNodeColor(n))
     expansionRing.setAttribute('stroke-width', '1.5')
     expansionRing.setAttribute('stroke-dasharray', '3 3')
     expansionRing.setAttribute('pointer-events', 'none')
@@ -4025,7 +4251,7 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     const activeRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
     activeRing.setAttribute('r', String(r + 5))
     activeRing.setAttribute('fill', 'none')
-    activeRing.setAttribute('stroke', nodeColorMap[n.type] || '#8c8c8c')
+    activeRing.setAttribute('stroke', graphNodeColor(n))
     activeRing.setAttribute('stroke-width', '2')
     activeRing.style.opacity = '0'
     activeRing.style.transition = 'opacity 0.2s'
@@ -4034,12 +4260,23 @@ function renderGraph(opts: RenderGraphOpts = {}) {
 
     const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
     circle.setAttribute('r', String(r))
-    circle.setAttribute('fill', nodeColorMap[n.type] || '#8c8c8c')
-    circle.setAttribute('stroke', '#fff')
+    circle.setAttribute('fill', graphNodeColor(n))
+    circle.setAttribute('stroke', 'var(--td-bg-color-container)')
     circle.setAttribute('stroke-width', '2')
     // circle.setAttribute('filter', 'url(#node-shadow)')
     circle.style.transition = 'r 0.2s, stroke-width 0.2s, opacity 0.2s'
     g.appendChild(circle)
+
+    if (isPersonalProfile.value && n.learningStatus === 'mastered') {
+      const mastered = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      mastered.setAttribute('text-anchor', 'middle')
+      mastered.setAttribute('dy', '4')
+      mastered.setAttribute('fill', 'var(--td-text-color-anti)')
+      mastered.setAttribute('font-size', '12')
+      mastered.setAttribute('pointer-events', 'none')
+      mastered.textContent = '★'
+      g.appendChild(mastered)
+    }
 
     // Text label wrapper for better readability
     const textBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
@@ -4400,7 +4637,7 @@ function setupDrag(
     const p = getPoint(e)
     startX = p.x - node.x
     startY = p.y - node.y
-    g.querySelector('circle')?.setAttribute('stroke', nodeColorMap[node.type] || '#8c8c8c')
+    g.querySelector('circle')?.setAttribute('stroke', graphNodeColor(node))
     g.querySelector('circle')?.setAttribute('stroke-width', '3')
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onEnd)
@@ -4426,7 +4663,7 @@ function setupDrag(
   function onEnd() {
     dragging = false
     // Keep pinned after drag so the node stays where user placed it
-    g.querySelector('circle')?.setAttribute('stroke', '#fff')
+    g.querySelector('circle')?.setAttribute('stroke', 'var(--td-bg-color-container)')
     g.querySelector('circle')?.setAttribute('stroke-width', '2')
     window.removeEventListener('mousemove', onMove)
     window.removeEventListener('mouseup', onEnd)
@@ -4601,9 +4838,8 @@ function applyHighlight(
 
       // Determine which node is driving the highlight color
       const focusSlug = (hoverSlug && (e.source === hoverSlug || e.target === hoverSlug)) ? hoverSlug : slug
-      const hlColor = nodeColorMap[
-        nodeEls.find(n => n.node.slug === focusSlug)?.node.type || ''
-      ] || '#0052d9'
+      const focusNode = nodeEls.find(n => n.node.slug === focusSlug)?.node
+      const hlColor = focusNode ? graphNodeColor(focusNode) : 'var(--td-brand-color)'
 
       e.line.setAttribute('stroke', hlColor)
       e.line.setAttribute('marker-end', 'url(#arrow-end-hl)')
@@ -4824,7 +5060,7 @@ watch(searchQuery, (val) => {
 })
 
 watch(() => props.view, (v) => {
-  if (v === 'graph') {
+  if (v === 'graph' || v === 'profile') {
     loadGraph()
   } else if (v === 'browser') {
     nextTick(async () => {
@@ -4838,7 +5074,7 @@ watch(() => props.view, (v) => {
 watch(() => route.query.slug, (newSlug) => {
   if (newSlug && typeof newSlug === 'string') {
     if (!selectedPage.value || selectedPage.value.slug !== newSlug) {
-      if (props.view === 'graph') {
+      if (props.view === 'graph' || props.view === 'profile') {
         handleGraphSearchSelect(newSlug)
       } else {
         navigateToSlug(newSlug)
@@ -4850,10 +5086,12 @@ watch(() => route.query.slug, (newSlug) => {
 onMounted(() => {
   loadPages()
   loadStats()
-  if (props.view === 'graph') loadGraph()
+  if (props.view === 'graph' || props.view === 'profile') loadGraph()
+  window.addEventListener('focus', handlePersonalWindowFocus)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('focus', handlePersonalWindowFocus)
   if (statsTimer) {
     clearInterval(statsTimer)
   }
@@ -4874,6 +5112,17 @@ onUnmounted(() => {
     loadMoreObserver = null
   }
 })
+
+watch(personalFilters, () => {
+  if (isPersonalProfile.value && graphData.value) renderGraph({ preserveLayout: true })
+}, { deep: true })
+
+function handlePersonalWindowFocus() {
+  if (!isPersonalProfile.value || personalStatesLoading.value) return
+  const last = personalLastUpdated.value ? Date.parse(personalLastUpdated.value) : 0
+  if (Date.now() - last < 30_000) return
+  refreshPersonalProfile()
+}
 </script>
 
 <style scoped lang="less">
@@ -6077,6 +6326,131 @@ onUnmounted(() => {
   overflow: hidden;
   width: 100%;
   height: 100%;
+}
+
+.personal-profile-panel {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 12;
+  width: min(720px, calc(100% - 230px));
+  padding: 12px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  background: var(--td-bg-color-container);
+  box-shadow: var(--td-shadow-1);
+}
+
+.personal-profile-heading,
+.personal-evidence-status-row,
+.personal-evidence-item-head,
+.personal-evidence-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.personal-profile-title {
+  color: var(--td-text-color-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.personal-profile-updated,
+.personal-evidence-item-meta {
+  color: var(--td-text-color-placeholder);
+  font-size: 11px;
+}
+
+.personal-profile-counts,
+.personal-profile-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 10px;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+}
+
+.personal-profile-filters :deep(.t-input),
+.personal-profile-filters :deep(.t-select) {
+  width: 170px;
+}
+
+.personal-profile-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.personal-profile-error,
+.personal-profile-empty {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--td-text-color-secondary);
+  background: var(--td-bg-color-secondarycontainer);
+  font-size: 12px;
+}
+
+.personal-profile-error { color: var(--td-error-color); }
+
+.legend-status {
+  width: 14px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.legend-status--unknown { color: var(--td-text-color-placeholder); }
+.legend-status--exposed { color: var(--td-brand-color); }
+.legend-status--familiar,
+.legend-status--mastered { color: var(--td-success-color); }
+
+.personal-evidence-summary {
+  margin-bottom: 16px;
+  color: var(--td-text-color-secondary);
+}
+
+.personal-evidence-state-grid,
+.personal-technical-grid {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+  gap: 6px 10px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.personal-technical-grid {
+  padding: 9px;
+  border-radius: 6px;
+  background: var(--td-bg-color-secondarycontainer);
+}
+
+.personal-technical-grid code {
+  overflow-wrap: anywhere;
+  color: var(--td-text-color-primary);
+}
+
+.personal-evidence-loading {
+  display: flex;
+  justify-content: center;
+  padding: 16px;
+}
+
+.personal-evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.personal-evidence-item {
+  padding: 10px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 6px;
+  background: var(--td-bg-color-container);
 }
 
 .wiki-graph-empty {

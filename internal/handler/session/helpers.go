@@ -332,7 +332,7 @@ func (h *Handler) setupStopEventHandler(
 			context.WithoutCancel(ctx),
 			types.TenantIDContextKey, sessionTenantID,
 		)
-		h.completeAssistantMessage(updateCtx, assistantMessage, "", "") // empty query: stopped conversations are not indexed
+		h.completeAssistantMessage(updateCtx, assistantMessage, "", "", false) // stopped conversations do not produce learning evidence
 		return nil
 	})
 }

@@ -21,6 +21,10 @@ type MemoryWikiRepository interface {
 // and manages the links they confirm.
 type MemoryWikiService interface {
 	FindCandidates(ctx context.Context, memoryItemID, knowledgeBaseID string, topK int) ([]*types.MemoryWikiCandidate, error)
+	// FindCandidatesForText reuses the Memory-Wiki retrieval projection for
+	// text that is already available from another durable source, such as a
+	// persisted user chat message.
+	FindCandidatesForText(ctx context.Context, text, knowledgeBaseID string, topK int) ([]*types.MemoryWikiCandidate, error)
 	UpsertLink(ctx context.Context, memoryItemID, wikiPageID string, score float64, method string) (*types.MemoryWikiLinkView, error)
 	ListLinks(ctx context.Context) ([]*types.MemoryWikiLinkView, error)
 	DeleteLink(ctx context.Context, id string) error

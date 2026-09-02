@@ -216,6 +216,26 @@ func TestMemoryWikiCandidatesReturnEmptyWithoutRetrieverHits(t *testing.T) {
 	require.Empty(t, candidates)
 }
 
+func TestMemoryWikiCandidatesForTextReusesProjectionWithoutMemoryItem(t *testing.T) {
+	svc, kbService := newMemoryWikiCandidateService([]*types.SearchResult{
+		{ID: "chunk-a", KnowledgeID: "doc-a", KnowledgeBaseID: "kb-1", Score: 0.8},
+	}, map[string][]*types.WikiPage{
+		"doc-a": {{
+			ID: "page-a", TenantID: 1, KnowledgeBaseID: "kb-1", Title: "Mamba",
+			Slug: "concept/mamba", Status: types.WikiPageStatusPublished,
+			SourceRefs: types.StringArray{"doc-a"}, ChunkRefs: types.StringArray{"chunk-a"},
+		}},
+	})
+
+	candidates, err := svc.FindCandidatesForText(
+		memoryWikiTestContext(t, 1, "alice"), "Mamba 医学图像分割", "kb-1", 3,
+	)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	require.Equal(t, "Mamba 医学图像分割", kbService.lastParams.QueryText)
+	require.Equal(t, "page-a", candidates[0].WikiPageID)
+}
+
 func TestMemoryWikiCandidatesRejectCrossTenantKB(t *testing.T) {
 	svc, kbService := newMemoryWikiCandidateService(nil, nil)
 	kbService.kb.TenantID = 2

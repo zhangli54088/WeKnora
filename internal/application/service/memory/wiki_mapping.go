@@ -121,7 +121,21 @@ func (s *memoryWikiService) scopedWikiKB(
 func (s *memoryWikiService) FindCandidates(
 	ctx context.Context, memoryItemID, knowledgeBaseID string, topK int,
 ) ([]*types.MemoryWikiCandidate, error) {
-	scope, item, err := s.scopedMemory(ctx, memoryItemID)
+	_, item, err := s.scopedMemory(ctx, memoryItemID)
+	if err != nil {
+		return nil, err
+	}
+	return s.FindCandidatesForText(ctx, embeddableText(item, nil), knowledgeBaseID, topK)
+}
+
+// FindCandidatesForText projects arbitrary caller-owned text through the same
+// HybridSearch -> ChunkRefs/SourceRefs -> WikiPage path used by MemoryItem.
+// The authenticated scope and Wiki-enabled KB check remain mandatory so this
+// reusable entry point cannot become a cross-tenant lookup primitive.
+func (s *memoryWikiService) FindCandidatesForText(
+	ctx context.Context, text, knowledgeBaseID string, topK int,
+) ([]*types.MemoryWikiCandidate, error) {
+	scope, err := ResolveScope(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +144,7 @@ func (s *memoryWikiService) FindCandidates(
 	}
 	topK = normalizeMemoryWikiTopK(topK)
 
-	query := embeddableText(item, nil)
+	query := strings.TrimSpace(text)
 	if strings.TrimSpace(query) == "" {
 		return []*types.MemoryWikiCandidate{}, nil
 	}

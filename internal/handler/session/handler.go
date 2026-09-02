@@ -36,7 +36,8 @@ type Handler struct {
 	// after an agent turn completes. May be nil when the sandbox backend does
 	// not support artifact collection; handlers must check before using.
 	artifactCollector *service.ArtifactCollector
-	memoryService     interfaces.MemoryService // Service for cross-session long-term memory
+	memoryService         interfaces.MemoryService // Service for cross-session long-term memory
+	chatLearningService   interfaces.ChatLearningService
 }
 
 // NewHandler creates a new instance of Handler with all necessary dependencies
@@ -59,6 +60,7 @@ func NewHandler(
 	temporaryDocuments interfaces.TemporaryDocumentService,
 	artifactCollector *service.ArtifactCollector,
 	memoryService interfaces.MemoryService,
+	chatLearningService interfaces.ChatLearningService,
 ) *Handler {
 	return &Handler{
 		sessionService:       sessionService,
@@ -77,6 +79,7 @@ func NewHandler(
 		temporaryDocuments:   temporaryDocuments,
 		artifactCollector:    artifactCollector,
 		memoryService:        memoryService,
+		chatLearningService:  chatLearningService,
 		attachmentProcessor: NewAttachmentProcessor(
 			fileService,
 			documentReader,

@@ -80,7 +80,7 @@ export interface WikiGraphMeta {
 }
 
 export interface WikiGraphData {
-  nodes: { slug: string; title: string; page_type: string; link_count: number; familiar?: boolean }[];
+  nodes: { id: string; knowledge_base_id: string; slug: string; title: string; page_type: string; link_count: number; familiar?: boolean }[];
   edges: { source: string; target: string }[];
   meta: WikiGraphMeta;
 }

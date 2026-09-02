@@ -3,13 +3,15 @@ package types
 import "time"
 
 const (
-	LearningEvidenceTypeMemoryLink = "memory_link"
+	LearningEvidenceTypeMemoryLink      = "memory_link"
+	LearningEvidenceTypeChatInteraction = "chat_interaction"
 
 	LearningEvidenceLevelExposure    = "exposure"
 	LearningEvidenceLevelFamiliarity = "familiarity"
 	LearningEvidenceLevelMastery     = "mastery"
 
 	LearningEvidenceSourceMemoryWikiLink = "memory_wiki_link"
+	LearningEvidenceSourceChatMessage    = "chat_message"
 
 	UserKnowledgeStatusExposed  = "exposed"
 	UserKnowledgeStatusFamiliar = "familiar"

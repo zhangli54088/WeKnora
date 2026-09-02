@@ -10,7 +10,13 @@ import (
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
 
-const memoryWikiEvidenceWeight = 1.0
+const (
+	memoryWikiEvidenceWeight = 1.0
+	// Chat interaction only proves exposure. The fixed weight expresses the
+	// reliability of that observation and is deliberately unrelated to the
+	// retrieval score or mastery.
+	chatInteractionEvidenceWeight = 0.7
+)
 
 type learningProfileService struct {
 	repo     interfaces.LearningProfileRepository
@@ -65,6 +71,63 @@ func (s *learningProfileService) SyncMemoryWikiLink(
 		}
 		_, err := recomputeKnowledgeStateWithRepo(ctx, txRepo, scope, link.WikiPageID)
 		return err
+	})
+}
+
+// RecordChatInteractions atomically upserts every safe candidate produced for
+// one persisted user message and recomputes the affected materialized states.
+// The evidence unique key makes task retries idempotent.
+func (s *learningProfileService) RecordChatInteractions(
+	ctx context.Context,
+	sessionID, messageID, knowledgeBaseID string,
+	candidates []*types.MemoryWikiCandidate,
+) error {
+	scope, err := ResolveScope(ctx)
+	if err != nil {
+		return err
+	}
+	messageID = strings.TrimSpace(messageID)
+	knowledgeBaseID = strings.TrimSpace(knowledgeBaseID)
+	if messageID == "" || knowledgeBaseID == "" || len(candidates) == 0 {
+		return nil
+	}
+
+	return s.repo.InTransaction(ctx, func(txRepo interfaces.LearningProfileRepository) error {
+		affected := make(map[string]struct{}, len(candidates))
+		for rank, candidate := range candidates {
+			if candidate == nil || candidate.WikiPageID == "" ||
+				candidate.KnowledgeBaseID != knowledgeBaseID ||
+				candidate.Method != types.MemoryWikiMethodChunkRef {
+				continue
+			}
+			evidence := &types.LearningEvidence{
+				WikiPageID:   candidate.WikiPageID,
+				EvidenceType: types.LearningEvidenceTypeChatInteraction,
+				Level:        types.LearningEvidenceLevelExposure,
+				SourceType:   types.LearningEvidenceSourceChatMessage,
+				SourceID:     messageID,
+				Weight:       chatInteractionEvidenceWeight,
+				Metadata: types.JSONMap{
+					"message_id":         messageID,
+					"session_id":         strings.TrimSpace(sessionID),
+					"knowledge_base_id":  knowledgeBaseID,
+					"mapping_score":      candidate.Score,
+					"mapping_method":     candidate.Method,
+					"rank":               rank + 1,
+				},
+				OccurredAt: time.Now(),
+			}
+			if _, err := txRepo.UpsertEvidence(ctx, scope, evidence); err != nil {
+				return err
+			}
+			affected[candidate.WikiPageID] = struct{}{}
+		}
+		for wikiPageID := range affected {
+			if _, err := recomputeKnowledgeStateWithRepo(ctx, txRepo, scope, wikiPageID); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

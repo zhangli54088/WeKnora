@@ -85,7 +85,7 @@ const kbLoading = ref(false);
 const docListLoading = ref(true);
 const isFAQ = computed(() => (kbInfo.value?.type || '') === 'faq');
 const isWiki = computed(() => !!kbInfo.value?.indexing_strategy?.wiki_enabled);
-const validTabs = ['documents', 'wiki', 'graph'] as const
+const validTabs = ['documents', 'wiki', 'graph', 'profile'] as const
 type KbTab = typeof validTabs[number]
 const initTab = validTabs.includes(route.query.tab as any) ? (route.query.tab as KbTab) : 'documents'
 const activeKbTab = ref<KbTab>(initTab);
@@ -2342,6 +2342,13 @@ async function createNewSession(value: string): Promise<void> {
                     </t-tooltip>
                   </span>
                 </t-tooltip>
+                <span class="breadcrumb-tab-sep">/</span>
+                <t-tooltip :content="$t('knowledgeEditor.wikiBrowser.tabProfileTip')" placement="bottom">
+                  <span :class="['breadcrumb-tab', { active: activeKbTab === 'profile', indexing: wikiIsIndexing }]"
+                    @click="activeKbTab = 'profile'">
+                    {{ $t('knowledgeEditor.wikiBrowser.tabProfile') }}
+                  </span>
+                </t-tooltip>
               </template>
               <span v-else class="breadcrumb-current">{{ $t('knowledgeEditor.document.title') }}</span>
             </h2>
@@ -2374,8 +2381,9 @@ async function createNewSession(value: string): Promise<void> {
       </div>
 
       <!-- Wiki Browser / Graph (shown when wiki or graph tab is active) -->
-      <div v-if="isWiki && (activeKbTab === 'wiki' || activeKbTab === 'graph')" class="wiki-main-area">
-        <WikiBrowser v-if="kbId" :knowledge-base-id="kbId" :view="activeKbTab === 'graph' ? 'graph' : 'browser'"
+      <div v-if="isWiki && (activeKbTab === 'wiki' || activeKbTab === 'graph' || activeKbTab === 'profile')" class="wiki-main-area">
+        <WikiBrowser v-if="kbId" :knowledge-base-id="kbId"
+          :view="activeKbTab === 'profile' ? 'profile' : activeKbTab === 'graph' ? 'graph' : 'browser'"
           :can-edit="canEdit" @open-source-doc="openSourceDoc" @status-change="onWikiStatusChange"
           @view-graph="onViewWikiInGraph" />
       </div>

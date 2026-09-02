@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/errors"
@@ -986,7 +987,7 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 
 				logger.Infof(streamCtx.asyncCtx, "Knowledge QA service completed for session: %s", sessionID)
 				updateCtx := context.WithValue(streamCtx.asyncCtx, types.TenantIDContextKey, reqCtx.session.TenantID)
-				h.completeAssistantMessage(updateCtx, streamCtx.assistantMessage, reqCtx.query, reqCtx.userMessageID)
+				h.completeAssistantMessage(updateCtx, streamCtx.assistantMessage, reqCtx.query, reqCtx.userMessageID, true)
 				streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
 					Type:      event.EventAgentComplete,
 					SessionID: sessionID,
@@ -997,8 +998,17 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 		})
 	}
 
+	var agentTurnFailed atomic.Bool
+	if mode == qaModeAgent {
+		streamCtx.eventBus.On(event.EventError, func(context.Context, event.Event) error {
+			agentTurnFailed.Store(true)
+			return nil
+		})
+	}
+
 	// Execute QA asynchronously
 	go func() {
+		var serviceErr error
 		defer func() {
 			if r := recover(); r != nil {
 				buf := make([]byte, 10240)
@@ -1022,7 +1032,10 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 					context.WithoutCancel(streamCtx.asyncCtx),
 					types.TenantIDContextKey, reqCtx.session.TenantID,
 				)
-				h.completeAssistantMessage(updateCtx, streamCtx.assistantMessage, reqCtx.query, reqCtx.userMessageID)
+				succeeded := serviceErr == nil && streamCtx.asyncCtx.Err() == nil && !agentTurnFailed.Load()
+				h.completeAssistantMessage(
+					updateCtx, streamCtx.assistantMessage, reqCtx.query, reqCtx.userMessageID, succeeded,
+				)
 				logger.Infof(streamCtx.asyncCtx, "Agent QA service completed for session: %s", sessionID)
 			}
 		}()
@@ -1037,7 +1050,6 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 		// Build QA request and invoke the appropriate service
 		qaReq := reqCtx.buildQARequest()
 
-		var serviceErr error
 		var stageName string
 		if mode == qaModeNormal {
 			stageName = "knowledge_qa_execution"
@@ -1428,7 +1440,7 @@ func appendQuickAnswerReasoning(msg *types.Message, content string) {
 // completeAssistantMessage marks an assistant message as complete, updates it,
 // and asynchronously indexes the Q&A pair into the chat history knowledge base.
 func (h *Handler) completeAssistantMessage(
-	ctx context.Context, assistantMessage *types.Message, userQuery, userMessageID string,
+	ctx context.Context, assistantMessage *types.Message, userQuery, userMessageID string, turnSucceeded bool,
 ) {
 	assistantMessage.UpdatedAt = time.Now()
 	assistantMessage.IsCompleted = true
@@ -1450,6 +1462,34 @@ func (h *Handler) completeAssistantMessage(
 	if userQuery != "" {
 		go h.recordTurnMemory(bgCtx, assistantMessage, userQuery, userMessageID)
 	}
+	if turnSucceeded && userQuery != "" && userMessageID != "" && h.chatLearningService != nil {
+		knowledgeBaseIDs := knowledgeBaseIDsFromReferences(assistantMessage.KnowledgeReferences)
+		if len(knowledgeBaseIDs) > 0 {
+			h.chatLearningService.ScheduleChatTurn(
+				bgCtx, assistantMessage.SessionID, userMessageID, knowledgeBaseIDs,
+			)
+		}
+	}
+}
+
+func knowledgeBaseIDsFromReferences(refs types.References) []string {
+	ids := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, ref := range refs {
+		if ref == nil {
+			continue
+		}
+		id := strings.TrimSpace(ref.KnowledgeBaseID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // recordTurnMemory runs the long-term memory write path for a finished turn.

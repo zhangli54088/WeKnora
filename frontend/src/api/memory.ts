@@ -7,6 +7,35 @@ export type MemoryKind = 'profile' | 'preference' | 'fact' | 'task' | 'interest'
 export type MemoryStatus = 'active' | 'superseded' | 'archived' | 'pending'
 export type MemoryOrigin = 'explicit' | 'extracted' | 'manual'
 
+export type KnowledgeStatus = 'unknown' | 'exposed' | 'familiar' | 'mastered'
+
+export interface UserKnowledgeState {
+  id: string
+  wiki_page_id: string
+  title: string
+  slug: string
+  knowledge_base_id: string
+  status: Exclude<KnowledgeStatus, 'unknown'>
+  confidence: number
+  evidence_count: number
+  last_evidence_at: string
+  updated_at: string
+}
+
+export interface LearningEvidence {
+  id: string
+  wiki_page_id: string
+  evidence_type: string
+  level: 'exposure' | 'familiarity' | 'mastery'
+  source_type: 'chat_message' | 'memory_wiki_link' | string
+  source_id: string
+  weight: number
+  metadata: Record<string, unknown>
+  occurred_at: string
+  created_at: string
+  updated_at: string
+}
+
 export interface MemoryItem {
   id: string
   kind: MemoryKind
@@ -108,6 +137,20 @@ export function deleteMemoryItem(id: string) {
 
 export function clearMemoryItems() {
   return del<{ success: boolean; removed: number }>('/api/v1/memory/items')
+}
+
+export function listKnowledgeStates(knowledgeBaseId: string) {
+  const query = new URLSearchParams({ knowledge_base_id: knowledgeBaseId })
+  return get<{ success: boolean; data: UserKnowledgeState[] }>(
+    `/api/v1/memory/knowledge-states?${query.toString()}`,
+  )
+}
+
+export function listLearningEvidence(wikiPageId: string) {
+  const query = new URLSearchParams({ wiki_page_id: wikiPageId })
+  return get<{ success: boolean; data: LearningEvidence[] }>(
+    `/api/v1/memory/learning-evidence?${query.toString()}`,
+  )
 }
 
 export function exportMemoryItems() {

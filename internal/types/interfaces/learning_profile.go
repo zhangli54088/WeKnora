@@ -24,6 +24,7 @@ type LearningProfileRepository interface {
 // materialized state, and exposes the authenticated caller's profile.
 type LearningProfileService interface {
 	SyncMemoryWikiLink(ctx context.Context, link *types.MemoryWikiLink) error
+	RecordChatInteractions(ctx context.Context, sessionID, messageID, knowledgeBaseID string, candidates []*types.MemoryWikiCandidate) error
 	RemoveMemoryWikiLinkEvidence(ctx context.Context, link *types.MemoryWikiLink) error
 	RecomputeKnowledgeState(ctx context.Context, wikiPageID string) (*types.UserKnowledgeState, error)
 	ListEvidence(ctx context.Context, wikiPageID string) ([]*types.LearningEvidence, error)

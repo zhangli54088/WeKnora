@@ -49,12 +49,17 @@ func newLearningProfileServiceHarness(
 		Slug: "concept/page-a", Title: "Page A",
 		PageType: types.WikiPageTypeConcept, Status: types.WikiPageStatusPublished,
 	}
-	require.NoError(t, db.Create(page).Error)
+	otherTenantPage := &types.WikiPage{
+		ID: "page-b", TenantID: 2, KnowledgeBaseID: "kb-b",
+		Slug: "concept/page-b", Title: "Page B",
+		PageType: types.WikiPageTypeConcept, Status: types.WikiPageStatusPublished,
+	}
+	require.NoError(t, db.Create([]*types.WikiPage{page, otherTenantPage}).Error)
 	repo := repository.NewLearningProfileRepository(db)
 	return &learningProfileService{
 		repo: repo,
 		wikiRepo: &learningProfileWikiRepoStub{pages: map[string]*types.WikiPage{
-			page.ID: page,
+			page.ID: page, otherTenantPage.ID: otherTenantPage,
 		}},
 	}, repo, db
 }
@@ -182,4 +187,106 @@ func TestLearningProfileKnowledgeStateViewsIncludeWikiIdentity(t *testing.T) {
 	filtered, err := svc.ListKnowledgeStates(ctx, "kb-other")
 	require.NoError(t, err)
 	require.Empty(t, filtered)
+}
+
+func TestLearningProfileChatInteractionIsExposureAndIdempotent(t *testing.T) {
+	svc, _, _ := newLearningProfileServiceHarness(t)
+	ctx := memoryWikiTestContext(t, 1, "alice")
+	candidate := &types.MemoryWikiCandidate{
+		WikiPageID: "page-a", KnowledgeBaseID: "kb-a",
+		Method: types.MemoryWikiMethodChunkRef, Score: 0.42,
+	}
+
+	require.NoError(t, svc.RecordChatInteractions(ctx, "session-1", "message-1", "kb-a", []*types.MemoryWikiCandidate{candidate}))
+	require.NoError(t, svc.RecordChatInteractions(ctx, "session-1", "message-1", "kb-a", []*types.MemoryWikiCandidate{candidate}))
+	evidence, err := svc.ListEvidence(ctx, "page-a")
+	require.NoError(t, err)
+	require.Len(t, evidence, 1)
+	require.Equal(t, types.LearningEvidenceTypeChatInteraction, evidence[0].EvidenceType)
+	require.Equal(t, types.LearningEvidenceLevelExposure, evidence[0].Level)
+	require.Equal(t, types.LearningEvidenceSourceChatMessage, evidence[0].SourceType)
+	require.Equal(t, "message-1", evidence[0].SourceID)
+	require.Equal(t, chatInteractionEvidenceWeight, evidence[0].Weight)
+	require.Equal(t, "session-1", evidence[0].Metadata["session_id"])
+	require.Equal(t, types.MemoryWikiMethodChunkRef, evidence[0].Metadata["mapping_method"])
+
+	states, err := svc.ListKnowledgeStates(ctx, "kb-a")
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.Equal(t, types.UserKnowledgeStatusExposed, states[0].Status)
+	require.Equal(t, 1, states[0].EvidenceCount)
+}
+
+func TestLearningProfileDifferentChatMessagesIncrementEvidenceCount(t *testing.T) {
+	svc, _, _ := newLearningProfileServiceHarness(t)
+	ctx := memoryWikiTestContext(t, 1, "alice")
+	candidates := []*types.MemoryWikiCandidate{{
+		WikiPageID: "page-a", KnowledgeBaseID: "kb-a", Method: types.MemoryWikiMethodChunkRef,
+	}}
+	require.NoError(t, svc.RecordChatInteractions(ctx, "session-1", "message-1", "kb-a", candidates))
+	require.NoError(t, svc.RecordChatInteractions(ctx, "session-1", "message-2", "kb-a", candidates))
+	states, err := svc.ListKnowledgeStates(ctx, "kb-a")
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.Equal(t, 2, states[0].EvidenceCount)
+}
+
+func TestLearningProfileChatExposureDoesNotDowngradeFamiliarOrMastered(t *testing.T) {
+	for _, test := range []struct {
+		name, level, want string
+	}{
+		{name: "familiar", level: types.LearningEvidenceLevelFamiliarity, want: types.UserKnowledgeStatusFamiliar},
+		{name: "mastered", level: types.LearningEvidenceLevelMastery, want: types.UserKnowledgeStatusMastered},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc, repo, _ := newLearningProfileServiceHarness(t)
+			ctx := memoryWikiTestContext(t, 1, "alice")
+			scope := interfaces.MemoryScope{TenantID: 1, SubjectID: "web_user:alice"}
+			_, err := repo.UpsertEvidence(ctx, scope, &types.LearningEvidence{
+				WikiPageID: "page-a", EvidenceType: "test", Level: test.level,
+				SourceType: "test", SourceID: "strong-1", Weight: 1, OccurredAt: time.Now(),
+			})
+			require.NoError(t, err)
+			_, err = svc.RecomputeKnowledgeState(ctx, "page-a")
+			require.NoError(t, err)
+			require.NoError(t, svc.RecordChatInteractions(ctx, "session-1", "message-1", "kb-a", []*types.MemoryWikiCandidate{{
+				WikiPageID: "page-a", KnowledgeBaseID: "kb-a", Method: types.MemoryWikiMethodChunkRef,
+			}}))
+			state, err := repo.GetKnowledgeState(ctx, scope, "page-a")
+			require.NoError(t, err)
+			require.Equal(t, test.want, state.Status)
+			require.Equal(t, 2, state.EvidenceCount)
+		})
+	}
+}
+
+func TestLearningProfileChatEvidenceIsTenantAndSubjectScoped(t *testing.T) {
+	svc, _, db := newLearningProfileServiceHarness(t)
+	candidate := []*types.MemoryWikiCandidate{{
+		WikiPageID: "page-a", KnowledgeBaseID: "kb-a", Method: types.MemoryWikiMethodChunkRef,
+	}}
+	require.NoError(t, svc.RecordChatInteractions(
+		memoryWikiTestContext(t, 1, "alice"), "session-a", "message-a", "kb-a", candidate,
+	))
+	require.NoError(t, svc.RecordChatInteractions(
+		memoryWikiTestContext(t, 1, "bob"), "session-b", "message-b", "kb-a", candidate,
+	))
+	require.NoError(t, svc.RecordChatInteractions(
+		memoryWikiTestContext(t, 2, "alice"), "session-c", "message-c", "kb-b",
+		[]*types.MemoryWikiCandidate{{
+			WikiPageID: "page-b", KnowledgeBaseID: "kb-b", Method: types.MemoryWikiMethodChunkRef,
+		}},
+	))
+	var count int64
+	require.NoError(t, db.Model(&types.LearningEvidence{}).Count(&count).Error)
+	require.EqualValues(t, 3, count)
+
+	alice, err := svc.ListEvidence(memoryWikiTestContext(t, 1, "alice"), "page-a")
+	require.NoError(t, err)
+	require.Len(t, alice, 1)
+	require.Equal(t, "message-a", alice[0].SourceID)
+	tenantTwo, err := svc.ListEvidence(memoryWikiTestContext(t, 2, "alice"), "page-b")
+	require.NoError(t, err)
+	require.Len(t, tenantTwo, 1)
+	require.Equal(t, "message-c", tenantTwo[0].SourceID)
 }
