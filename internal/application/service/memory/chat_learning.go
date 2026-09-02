@@ -12,6 +12,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/hibiken/asynq"
+	"gorm.io/gorm"
 )
 
 const (
@@ -46,20 +47,46 @@ func NewChatLearningService(
 func (s *chatLearningService) ScheduleChatTurn(
 	ctx context.Context, sessionID, messageID string, knowledgeBaseIDs []string,
 ) {
+	logCtx := logger.WithFields(ctx, logger.Fields{
+		"session_id": sessionID, "message_id": messageID, "input_kb_count": len(knowledgeBaseIDs),
+	})
+	logger.Info(logCtx, "[chat-learning] schedule_start")
 	scope, err := ResolveScope(ctx)
-	if err != nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(messageID) == "" {
+	if err != nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "resolve_scope_failed", "error": err.Error(),
+		}, "[chat-learning] schedule_skip")
+		return
+	}
+	logCtx = logger.WithFields(logCtx, logger.Fields{
+		"tenant_id": scope.TenantID, "subject_id": scope.SubjectID,
+	})
+	if strings.TrimSpace(sessionID) == "" {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "empty_session_id"), "[chat-learning] schedule_skip")
+		return
+	}
+	if strings.TrimSpace(messageID) == "" {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "empty_message_id"), "[chat-learning] schedule_skip")
 		return
 	}
 	kbIDs := normalizeChatLearningKBIDs(knowledgeBaseIDs)
 	if len(kbIDs) == 0 {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "no_normalized_kbs"), "[chat-learning] schedule_skip")
 		return
 	}
 	principal, ok := types.PrincipalFromContext(ctx)
-	if !ok || principal.StorageID() != scope.SubjectID {
+	if !ok {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "principal_missing"), "[chat-learning] schedule_skip")
+		return
+	}
+	if principal.StorageID() != scope.SubjectID {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "principal_scope_mismatch"), "[chat-learning] schedule_skip")
 		return
 	}
 	if s.enqueuer == nil {
-		logger.Warnf(ctx, "chat learning: no task enqueuer configured, skipping message %s", messageID)
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "enqueuer_missing",
+		}, "[chat-learning] schedule_skip")
 		return
 	}
 	payload := types.ChatLearningPayload{
@@ -79,7 +106,7 @@ func (s *chatLearningService) ScheduleChatTurn(
 			"tenant_id": scope.TenantID, "subject_id": scope.SubjectID,
 			"session_id": sessionID, "message_id": messageID,
 			"knowledge_base_ids": kbIDs, "error": err.Error(),
-		}, "chat learning: marshal task failed")
+		}, "[chat-learning] marshal_failed")
 		return
 	}
 	if _, err := s.enqueuer.Enqueue(
@@ -91,7 +118,9 @@ func (s *chatLearningService) ScheduleChatTurn(
 			"tenant_id": scope.TenantID, "subject_id": scope.SubjectID,
 			"session_id": sessionID, "message_id": messageID,
 			"knowledge_base_ids": kbIDs, "error": err.Error(),
-		}, "chat learning: enqueue failed")
+		}, "[chat-learning] enqueue_failed")
+	} else {
+		logger.Info(logger.WithField(logCtx, "kb_count", len(kbIDs)), "[chat-learning] enqueue_success")
 	}
 }
 
@@ -100,11 +129,20 @@ func (s *chatLearningService) ScheduleChatTurn(
 func (s *chatLearningService) Handle(ctx context.Context, task *asynq.Task) error {
 	var payload types.ChatLearningPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		logger.WarnWithFields(ctx, logger.Fields{"error": err.Error()}, "[chat-learning] payload_decode_failed")
 		return fmt.Errorf("unmarshal chat learning payload: %w", err)
 	}
+	logCtx := logger.WithFields(ctx, logger.Fields{
+		"tenant_id": payload.TenantID, "subject_id": payload.SubjectID,
+		"session_id": payload.SessionID, "message_id": payload.MessageID,
+		"kb_count": len(payload.KnowledgeBaseIDs),
+	})
+	logger.Info(logCtx, "[chat-learning] worker_start")
 	principal := types.Principal{Type: payload.PrincipalType, ID: payload.PrincipalID}.Normalize()
 	if payload.TenantID == 0 || !principal.Valid() || principal.StorageID() != payload.SubjectID {
-		logger.Warnf(ctx, "chat learning: invalid task scope, dropping")
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "invalid_task_scope",
+		}, "[chat-learning] worker_skip")
 		return nil
 	}
 	ctx = context.WithValue(ctx, types.TenantIDContextKey, payload.TenantID)
@@ -114,11 +152,38 @@ func (s *chatLearningService) Handle(ctx context.Context, task *asynq.Task) erro
 	}
 	message, err := s.messageRepo.GetMessage(ctx, payload.SessionID, payload.MessageID)
 	if err != nil {
+		skipReason := "message_load_failed"
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			skipReason = "message_not_found"
+		}
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": skipReason, "error": err.Error(),
+		}, "[chat-learning] message_load_failed")
 		return fmt.Errorf("load chat learning message: %w", err)
 	}
-	if message == nil || message.Role != "user" || message.ID != payload.MessageID ||
-		message.SessionID != payload.SessionID {
-		logger.Warnf(ctx, "chat learning: message %s is not a persisted user message, dropping", payload.MessageID)
+	if message == nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "message_not_found",
+		}, "[chat-learning] worker_skip")
+		return nil
+	}
+	logger.Info(logger.WithFields(logCtx, logger.Fields{
+		"role": message.Role, "message_id": message.ID, "session_id": message.SessionID,
+	}), "[chat-learning] message_loaded")
+	var skipReason string
+	switch {
+	case message.Role != "user":
+		skipReason = "message_not_user"
+	case message.ID != payload.MessageID:
+		skipReason = "message_id_mismatch"
+	case message.SessionID != payload.SessionID:
+		skipReason = "session_id_mismatch"
+	}
+	if skipReason != "" {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": skipReason, "loaded_message_id": message.ID,
+			"loaded_session_id": message.SessionID, "role": message.Role,
+		}, "[chat-learning] worker_skip")
 		return nil
 	}
 	return s.RecordChatTurn(
@@ -134,25 +199,61 @@ func (s *chatLearningService) RecordChatTurn(
 	sessionID, messageID, content string,
 	knowledgeBaseIDs []string,
 ) error {
-	if strings.TrimSpace(messageID) == "" || strings.TrimSpace(content) == "" {
+	logCtx := logger.WithFields(ctx, logger.Fields{"session_id": sessionID, "message_id": messageID})
+	if strings.TrimSpace(messageID) == "" {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "empty_message_id"), "[chat-learning] record_skip")
+		return nil
+	}
+	if strings.TrimSpace(content) == "" {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "empty_user_query"), "[chat-learning] record_skip")
 		return nil
 	}
 	kbIDs := normalizeChatLearningKBIDs(knowledgeBaseIDs)
 	if len(kbIDs) == 0 {
+		logger.Info(logger.WithField(logCtx, "skip_reason", "no_normalized_kbs"), "[chat-learning] record_skip")
 		return nil
 	}
 	scope, err := ResolveScope(ctx)
 	if err != nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "resolve_scope_failed", "error": err.Error(),
+		}, "[chat-learning] record_skip")
 		return err
 	}
+	logCtx = logger.WithFields(logCtx, logger.Fields{
+		"tenant_id": scope.TenantID, "subject_id": scope.SubjectID,
+	})
 
 	var firstErr error
 	seenPages := make(map[string]struct{})
 	for _, kbID := range kbIDs {
+		kbLogCtx := logger.WithField(logCtx, "knowledge_base_id", kbID)
 		candidates, err := s.mapper.FindCandidatesForText(
 			ctx, content, kbID, chatLearningCandidateTopK,
 		)
+		var exactChunkRefCount, sourceRefCount, otherCount int
+		for _, candidate := range candidates {
+			switch {
+			case candidate == nil:
+				otherCount++
+			case candidate.Method == types.MemoryWikiMethodChunkRef:
+				exactChunkRefCount++
+			case candidate.Method == types.MemoryWikiMethodSourceRef:
+				sourceRefCount++
+			default:
+				otherCount++
+			}
+		}
+		logger.Info(logger.WithFields(kbLogCtx, logger.Fields{
+			"raw_count": len(candidates), "exact_chunk_ref_count": exactChunkRefCount,
+			"source_ref_count": sourceRefCount, "other_count": otherCount,
+		}), "[chat-learning] candidates")
 		if errors.Is(err, ErrMemoryWikiDisabled) || errors.Is(err, ErrMemoryWikiKnowledgeBaseNotFound) {
+			skipReason := "wiki_disabled"
+			if errors.Is(err, ErrMemoryWikiKnowledgeBaseNotFound) {
+				skipReason = "knowledge_base_not_found"
+			}
+			logger.Info(logger.WithField(kbLogCtx, "skip_reason", skipReason), "[chat-learning] kb_skip")
 			continue
 		}
 		if err != nil {
@@ -160,7 +261,7 @@ func (s *chatLearningService) RecordChatTurn(
 				"tenant_id": scope.TenantID, "subject_id": scope.SubjectID,
 				"session_id": sessionID, "message_id": messageID,
 				"knowledge_base_id": kbID, "error": err.Error(),
-			}, "chat learning: wiki mapping failed")
+			}, "[chat-learning] mapping_failed")
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -179,18 +280,31 @@ func (s *chatLearningService) RecordChatTurn(
 			seenPages[candidate.WikiPageID] = struct{}{}
 			safe = append(safe, candidate)
 		}
+		acceptedFields := logger.Fields{"accepted_count": len(safe)}
+		if len(safe) == 0 {
+			acceptedFields["skip_reason"] = "no_exact_chunk_ref_candidates"
+		}
+		logger.Info(logger.WithFields(kbLogCtx, acceptedFields), "[chat-learning] accepted_candidates")
 		if len(safe) == 0 {
 			continue
+		}
+		for rank, candidate := range safe {
+			logger.Info(logger.WithFields(kbLogCtx, logger.Fields{
+				"wiki_page_id": candidate.WikiPageID, "mapping_method": candidate.Method,
+				"mapping_score": candidate.Score, "rank": rank + 1,
+			}), "[chat-learning] accepted_candidate")
 		}
 		if err := s.profile.RecordChatInteractions(ctx, sessionID, messageID, kbID, safe); err != nil {
 			logger.WarnWithFields(ctx, logger.Fields{
 				"tenant_id": scope.TenantID, "subject_id": scope.SubjectID,
 				"session_id": sessionID, "message_id": messageID,
 				"knowledge_base_id": kbID, "error": err.Error(),
-			}, "chat learning: evidence write failed")
+			}, "[chat-learning] evidence_write_failed")
 			if firstErr == nil {
 				firstErr = err
 			}
+		} else {
+			logger.Info(logger.WithField(kbLogCtx, "candidate_count", len(safe)), "[chat-learning] evidence_written")
 		}
 	}
 	return firstErr

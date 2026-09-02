@@ -1462,8 +1462,31 @@ func (h *Handler) completeAssistantMessage(
 	if userQuery != "" {
 		go h.recordTurnMemory(bgCtx, assistantMessage, userQuery, userMessageID)
 	}
+	knowledgeBaseIDs := knowledgeBaseIDsFromReferences(assistantMessage.KnowledgeReferences)
+	chatLearningLogCtx := logger.WithFields(bgCtx, logger.Fields{
+		"turn_succeeded": turnSucceeded, "has_user_query": userQuery != "",
+		"user_message_id": userMessageID, "session_id": assistantMessage.SessionID,
+		"reference_count": len(assistantMessage.KnowledgeReferences), "extracted_kb_count": len(knowledgeBaseIDs),
+		"chat_learning_service_available": h.chatLearningService != nil,
+	})
+	logger.Info(chatLearningLogCtx, "[chat-learning] schedule_check")
+	var skipReason string
+	switch {
+	case !turnSucceeded:
+		skipReason = "turn_failed"
+	case userQuery == "":
+		skipReason = "empty_user_query"
+	case userMessageID == "":
+		skipReason = "empty_user_message_id"
+	case h.chatLearningService == nil:
+		skipReason = "service_unavailable"
+	case len(knowledgeBaseIDs) == 0:
+		skipReason = "no_knowledge_base_ids"
+	}
+	if skipReason != "" {
+		logger.Info(logger.WithField(chatLearningLogCtx, "skip_reason", skipReason), "[chat-learning] schedule_skip")
+	}
 	if turnSucceeded && userQuery != "" && userMessageID != "" && h.chatLearningService != nil {
-		knowledgeBaseIDs := knowledgeBaseIDsFromReferences(assistantMessage.KnowledgeReferences)
 		if len(knowledgeBaseIDs) > 0 {
 			h.chatLearningService.ScheduleChatTurn(
 				bgCtx, assistantMessage.SessionID, userMessageID, knowledgeBaseIDs,
