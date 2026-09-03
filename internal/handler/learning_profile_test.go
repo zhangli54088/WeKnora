@@ -85,7 +85,7 @@ func newLearningProfileHandlerTestRouter(
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	})
-	handler := NewMemoryHandler(nil, nil, svc)
+	handler := NewMemoryHandler(nil, nil, svc, nil)
 	router.GET("/api/v1/memory/learning-evidence", handler.ListLearningEvidence)
 	router.GET("/api/v1/memory/knowledge-states", handler.ListKnowledgeStates)
 	return router

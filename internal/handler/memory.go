@@ -25,17 +25,20 @@ type MemoryHandler struct {
 	memoryService     interfaces.MemoryService
 	memoryWikiService interfaces.MemoryWikiService
 	learningProfile   interfaces.LearningProfileService
+	learningRecommendation interfaces.LearningRecommendationService
 }
 
 func NewMemoryHandler(
 	memoryService interfaces.MemoryService,
 	memoryWikiService interfaces.MemoryWikiService,
 	learningProfile interfaces.LearningProfileService,
+	learningRecommendation interfaces.LearningRecommendationService,
 ) *MemoryHandler {
 	return &MemoryHandler{
 		memoryService:     memoryService,
 		memoryWikiService: memoryWikiService,
 		learningProfile:   learningProfile,
+		learningRecommendation: learningRecommendation,
 	}
 }
 

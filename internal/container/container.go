@@ -298,6 +298,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	logger.Debugf(ctx, "[Container] Registering memory service...")
 	must(container.Provide(memory.NewMemoryService))
 	must(container.Provide(memory.NewLearningProfileService))
+	must(container.Provide(memory.NewLearningRecommendationService))
 	must(container.Provide(memory.NewMemoryWikiService))
 	must(container.Provide(memory.NewChatLearningService))
 

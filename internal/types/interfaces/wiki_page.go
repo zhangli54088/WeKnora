@@ -243,6 +243,9 @@ type WikiPageService interface {
 
 // WikiPageRepository defines the wiki page data persistence interface.
 type WikiPageRepository interface {
+	// ListLearningGraphPages returns a bounded content-free projection of existing
+	// Wiki hyperlinks. Explicit tenant + KB scoping is mandatory for recommendations.
+	ListLearningGraphPages(ctx context.Context, tenantID uint64, kbID string, limit int) ([]*types.WikiPage, error)
 	// Create inserts a new wiki page record.
 	Create(ctx context.Context, page *types.WikiPage) error
 

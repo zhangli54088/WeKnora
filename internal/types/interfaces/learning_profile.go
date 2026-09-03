@@ -10,6 +10,9 @@ import (
 // data method takes an explicit MemoryScope; InTransaction supplies a
 // transaction-bound repository for atomic evidence/state recomputation.
 type LearningProfileRepository interface {
+	// ListRecommendationSignals batch-loads states and memory-support flags only
+	// for the bounded graph page IDs, within the authenticated profile scope.
+	ListRecommendationSignals(ctx context.Context, scope MemoryScope, pageIDs []string) (*types.LearningRecommendationSignals, error)
 	InTransaction(ctx context.Context, fn func(LearningProfileRepository) error) error
 	UpsertEvidence(ctx context.Context, scope MemoryScope, evidence *types.LearningEvidence) (*types.LearningEvidence, error)
 	ListEvidence(ctx context.Context, scope MemoryScope, wikiPageID string) ([]*types.LearningEvidence, error)

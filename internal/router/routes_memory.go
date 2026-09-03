@@ -35,6 +35,7 @@ func RegisterMemoryRoutes(r *gin.RouterGroup, memoryHandler *handler.MemoryHandl
 		memoryGroup.DELETE("/wiki-links/:id", memoryHandler.DeleteWikiLink)
 		memoryGroup.GET("/learning-evidence", memoryHandler.ListLearningEvidence)
 		memoryGroup.GET("/knowledge-states", memoryHandler.ListKnowledgeStates)
+		memoryGroup.GET("/learning-recommendations", memoryHandler.ListLearningRecommendations)
 		memoryGroup.GET("/topics", memoryHandler.ListTopics)
 		memoryGroup.DELETE("/topics/:id", memoryHandler.DeleteTopic)
 		memoryGroup.POST("/topics/:id/promote", memoryHandler.PromoteTopic)

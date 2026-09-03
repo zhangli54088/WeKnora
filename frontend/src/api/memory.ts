@@ -9,6 +9,54 @@ export type MemoryOrigin = 'explicit' | 'extracted' | 'manual'
 
 export type KnowledgeStatus = 'unknown' | 'exposed' | 'familiar' | 'mastered'
 
+export interface SupportingKnowledgeNode {
+  wiki_page_id: string
+  slug: string
+  title: string
+  status: Exclude<KnowledgeStatus, 'unknown'>
+  evidence_count: number
+  last_evidence_at: string
+  memory_supported: boolean
+  path: string[]
+}
+
+export interface LearningRecommendation {
+  wiki_page_id: string
+  knowledge_base_id: string
+  slug: string
+  title: string
+  status: 'unknown'
+  score: number
+  rank: number
+  hop: number
+  reason_codes: string[]
+  supporting_nodes: SupportingKnowledgeNode[]
+  score_components: {
+    structural: number
+    anchor_strength: number
+    multi_anchor: number
+    recency: number
+    long_term_memory: number
+  }
+}
+
+export interface LearningRecommendationView {
+  knowledge_base_id: string
+  generated_at: string
+  scoring_at: string
+  wiki_enabled: boolean
+  truncated: boolean
+  recommendations: LearningRecommendation[]
+  context_graph: import('./wiki').WikiGraphData
+}
+
+export function listLearningRecommendations(knowledgeBaseId: string, limit = 5) {
+  const query = new URLSearchParams({ knowledge_base_id: knowledgeBaseId, limit: String(limit) })
+  return get<{ success: boolean; data: LearningRecommendationView }>(
+    `/api/v1/memory/learning-recommendations?${query.toString()}`,
+  )
+}
+
 export interface UserKnowledgeState {
   id: string
   wiki_page_id: string

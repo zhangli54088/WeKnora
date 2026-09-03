@@ -105,7 +105,7 @@ func newMemoryWikiHandlerTestRouter(svc interfaces.MemoryWikiService) *gin.Engin
 		c.Next()
 	})
 
-	handler := NewMemoryHandler(nil, svc, nil)
+	handler := NewMemoryHandler(nil, svc, nil, nil)
 	router.POST("/api/v1/memory/items/:id/wiki-candidates", handler.FindWikiCandidates)
 	router.POST("/api/v1/memory/items/:id/wiki-links", handler.UpsertWikiLink)
 	router.GET("/api/v1/memory/wiki-links", handler.ListWikiLinks)

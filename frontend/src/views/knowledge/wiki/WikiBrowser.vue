@@ -34,6 +34,7 @@
             <label class="personal-profile-switch"><t-switch v-model="personalFilters.litOnly" size="small" />{{ $t('knowledgeEditor.wikiBrowser.profileLitOnly') }}</label>
             <label class="personal-profile-switch"><t-switch v-model="personalFilters.includeContext" size="small" :disabled="!personalFilters.litOnly" />{{ $t('knowledgeEditor.wikiBrowser.profileIncludeContext') }}</label>
             <label class="personal-profile-switch"><t-switch v-model="personalDebug" size="small" />{{ $t('knowledgeEditor.wikiBrowser.profileTechnical') }}</label>
+            <label class="personal-profile-switch"><t-switch v-model="personalFilters.recommendedOnly" size="small" :disabled="recommendationsFailed" />{{ $t('learningRecommendation.onlyRecommended') }}</label>
           </div>
           <div v-if="personalStatesError" class="personal-profile-error">
             {{ $t('knowledgeEditor.wikiBrowser.profileLoadFailed') }}
@@ -42,6 +43,9 @@
           <div v-else-if="!personalStatesLoading && personalSummary.lit === 0" class="personal-profile-empty">
             {{ $t('knowledgeEditor.wikiBrowser.profileNoEvidence') }}
           </div>
+          <LearningRecommendationPanel :items="activeRecommendations" :loading="recommendationsLoading"
+            :failed="recommendationsFailed" :wiki-enabled="recommendationView?.wiki_enabled ?? true"
+            :truncated="recommendationView?.truncated ?? false" @select="selectRecommendation" @refresh="refreshPersonalProfile" />
         </div>
 
         <!-- Graph Search Overlay -->
@@ -87,6 +91,7 @@
 
         <!-- Legend Overlay -->
         <div v-if="graphReady" class="wiki-graph-legend" :class="{ 'legend-shifted': graphDrawerVisible }">
+          <div v-if="isPersonalProfile" class="legend-item"><span class="recommendation-legend-ring">#</span>{{ $t('learningRecommendation.legend') }}</div>
           <div v-if="isPersonalProfile" class="legend-items">
             <div class="legend-item"><span class="legend-status legend-status--unknown">○</span>{{ $t('knowledgeEditor.wikiBrowser.statusUnknown') }}</div>
             <div class="legend-item"><span class="legend-status legend-status--exposed">◐</span>{{ $t('knowledgeEditor.wikiBrowser.statusExposed') }}</div>
@@ -193,6 +198,8 @@
                 <span>state_id</span><code>{{ selectedKnowledgeState?.id || '-' }}</code>
               </div>
               <t-divider>{{ $t('knowledgeEditor.wikiBrowser.profileEvidenceTitle') }}</t-divider>
+              <LearningRecommendationDetails v-if="selectedRecommendation" :item="selectedRecommendation"
+                :view="recommendationView" :debug="personalDebug" />
               <div v-if="personalEvidenceLoading" class="personal-evidence-loading"><t-loading size="small" /></div>
               <div v-else-if="personalEvidenceError" class="personal-profile-error">
                 {{ $t('knowledgeEditor.wikiBrowser.profileEvidenceFailed') }}
@@ -894,8 +901,11 @@ import type { ProtectedFileAccessContext } from '@/utils/protectedFileAccess'
 import picturePreview from '@/components/picture-preview.vue'
 import WikiFolderActions from './WikiFolderActions.vue'
 import WikiRevisionDrawer from './WikiRevisionDrawer.vue'
-import { listKnowledgeStates, listLearningEvidence, type KnowledgeStatus, type LearningEvidence, type UserKnowledgeState } from '@/api/memory'
+import { listKnowledgeStates, listLearningEvidence, listLearningRecommendations, type LearningRecommendation, type LearningRecommendationView, type KnowledgeStatus, type LearningEvidence, type UserKnowledgeState } from '@/api/memory'
 import { filterPersonalKnowledgeGraph, mergePersonalKnowledgeGraph, summarizeKnowledgeStates } from './personalLearningGraph'
+import { createRecommendationLoader, mergeRecommendationGraph, selectLearningRecommendation } from './learningRecommendations'
+import LearningRecommendationPanel from './LearningRecommendationPanel.vue'
+import LearningRecommendationDetails from './LearningRecommendationDetails.vue'
 import {
   expandedWikiDirectoryPaths,
   expandWikiDirectoryPath,
@@ -1082,6 +1092,15 @@ const personalStatesLoading = ref(false)
 const personalStatesError = ref(false)
 const personalLastUpdated = ref('')
 const personalDebug = ref(false)
+const recommendationView = ref<LearningRecommendationView | null>(null)
+const recommendationsLoading = ref(false)
+const recommendationsFailed = ref(false)
+const recommendationLoader = createRecommendationLoader(async kbID => (await listLearningRecommendations(kbID)).data)
+const activeRecommendations = computed(() => recommendationView.value?.knowledge_base_id === props.knowledgeBaseId
+  ? recommendationView.value.recommendations.filter(item => !personalStates.value.some(state => state.wiki_page_id === item.wiki_page_id))
+  : [])
+const personalGraphData = computed(() => graphData.value
+  ? mergeRecommendationGraph(graphData.value, recommendationView.value, props.knowledgeBaseId) : null)
 const personalEvidence = ref<LearningEvidence[]>([])
 const personalEvidenceLoading = ref(false)
 const personalEvidenceError = ref(false)
@@ -1090,6 +1109,7 @@ const personalFilters = reactive({
   status: 'all' as KnowledgeStatus | 'all',
   litOnly: false,
   includeContext: false,
+  recommendedOnly: false,
 })
 const personalStatusOptions = computed(() => [
   { value: 'all', label: t('knowledgeEditor.wikiBrowser.statusAll') },
@@ -1098,8 +1118,8 @@ const personalStatusOptions = computed(() => [
   { value: 'familiar', label: t('knowledgeEditor.wikiBrowser.statusFamiliar') },
   { value: 'mastered', label: t('knowledgeEditor.wikiBrowser.statusMastered') },
 ])
-const personalNodes = computed(() => graphData.value
-  ? mergePersonalKnowledgeGraph(graphData.value, personalStates.value)
+const personalNodes = computed(() => personalGraphData.value
+  ? mergePersonalKnowledgeGraph(personalGraphData.value, personalStates.value, activeRecommendations.value)
   : [])
 const personalSummary = computed(() => summarizeKnowledgeStates(personalNodes.value))
 const searchQuery = ref('')
@@ -1112,26 +1132,54 @@ const graphLoading = ref(false)
 const graphReady = ref(false)
 const showArrows = ref(true)
 
+let personalStatesRequest = 0
 async function loadPersonalStates() {
   if (!isPersonalProfile.value || !props.knowledgeBaseId) return
+  const request = ++personalStatesRequest
+  const kbID = props.knowledgeBaseId
   personalStatesLoading.value = true
   personalStatesError.value = false
   try {
-    const response = await listKnowledgeStates(props.knowledgeBaseId)
+    const response = await listKnowledgeStates(kbID)
+    if (request !== personalStatesRequest || kbID !== props.knowledgeBaseId) return
     personalStates.value = response.data || []
     personalLastUpdated.value = new Date().toISOString()
   } catch (error) {
+    if (request !== personalStatesRequest || kbID !== props.knowledgeBaseId) return
     console.error('Failed to load personal knowledge states:', error)
     personalStatesError.value = true
   } finally {
-    personalStatesLoading.value = false
+    if (request === personalStatesRequest) personalStatesLoading.value = false
   }
 }
 
 async function refreshPersonalProfile() {
-  await loadPersonalStates()
+  await Promise.all([loadPersonalStates(), loadRecommendations()])
   renderGraph({ preserveLayout: true })
   if (graphDrawerPage.value) await loadSelectedEvidence()
+}
+
+async function loadRecommendations() {
+  if (!isPersonalProfile.value || !props.knowledgeBaseId) return
+  const kbID = props.knowledgeBaseId
+  recommendationsLoading.value = true
+  await recommendationLoader.load(kbID, (view, failed) => {
+    if (props.knowledgeBaseId !== kbID || !isPersonalProfile.value) return
+    recommendationView.value = view
+    recommendationsFailed.value = failed
+    recommendationsLoading.value = false
+    if (failed) personalFilters.recommendedOnly = false
+    if (graphReady.value) renderGraph({ preserveLayout: true })
+  })
+}
+
+async function selectRecommendation(item: LearningRecommendation) {
+  personalFilters.query = ''
+  personalFilters.status = 'all'
+  personalFilters.litOnly = false
+  await nextTick()
+  renderGraph({ preserveLayout: true })
+  await selectLearningRecommendation(item, handleGraphSearchSelect)
 }
 
 async function loadSelectedEvidence() {
@@ -1326,6 +1374,7 @@ const selectedKnowledgeState = computed(() => {
   const pageID = graphDrawerPage.value?.id
   return pageID ? personalStates.value.find(state => state.wiki_page_id === pageID) : undefined
 })
+const selectedRecommendation = computed(() => activeRecommendations.value.find(item => item.wiki_page_id === graphDrawerPage.value?.id))
 const navHistory = ref<WikiPage[]>([])
 // navFromSystemView remembers that the user was viewing the Index when they
 // clicked into a slug, so goBack can restore it
@@ -3343,6 +3392,7 @@ function graphFilterSelectsNothing(): boolean {
 }
 
 async function loadGraph() {
+  if (isPersonalProfile.value) void loadRecommendations()
   graphLoading.value = true
   graphReady.value = false
   graphMode.value = 'overview'
@@ -3965,7 +4015,7 @@ interface RenderGraphOpts {
 
 function renderGraph(opts: RenderGraphOpts = {}) {
   const container = graphRef.value
-  const data = graphData.value
+  const data = isPersonalProfile.value ? personalGraphData.value : graphData.value
   if (!container) return
   if (!data || !data.nodes?.length) {
     container.innerHTML = ''
@@ -4266,6 +4316,27 @@ function renderGraph(opts: RenderGraphOpts = {}) {
     // circle.setAttribute('filter', 'url(#node-shadow)')
     circle.style.transition = 'r 0.2s, stroke-width 0.2s, opacity 0.2s'
     g.appendChild(circle)
+
+    const recommendation = isPersonalProfile.value
+      ? renderedPersonalNodes.find(node => node.id === n.id)?.recommendation : undefined
+    if (recommendation) {
+      const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      ring.setAttribute('r', String(r + 5))
+      ring.setAttribute('fill', 'none')
+      ring.setAttribute('stroke', 'var(--td-warning-color)')
+      ring.setAttribute('stroke-width', '2')
+      ring.setAttribute('stroke-dasharray', '4 2')
+      ring.setAttribute('pointer-events', 'none')
+      g.appendChild(ring)
+      const badge = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      badge.setAttribute('y', String(-r - 9))
+      badge.setAttribute('text-anchor', 'middle')
+      badge.setAttribute('fill', 'var(--td-warning-color)')
+      badge.setAttribute('font-size', '12')
+      badge.setAttribute('pointer-events', 'none')
+      badge.textContent = `#${recommendation.rank}`
+      g.appendChild(badge)
+    }
 
     if (isPersonalProfile.value && n.learningStatus === 'mastered') {
       const mastered = document.createElementNS('http://www.w3.org/2000/svg', 'text')
@@ -5060,6 +5131,7 @@ watch(searchQuery, (val) => {
 })
 
 watch(() => props.view, (v) => {
+  recommendationLoader.invalidate()
   if (v === 'graph' || v === 'profile') {
     loadGraph()
   } else if (v === 'browser') {
@@ -5088,6 +5160,14 @@ onMounted(() => {
   loadStats()
   if (props.view === 'graph' || props.view === 'profile') loadGraph()
   window.addEventListener('focus', handlePersonalWindowFocus)
+})
+
+watch(() => props.knowledgeBaseId, () => {
+  recommendationLoader.invalidate()
+  recommendationView.value = null
+  recommendationsFailed.value = false
+  personalStates.value = []
+  if (isPersonalProfile.value) void loadRecommendations()
 })
 
 onUnmounted(() => {
@@ -6329,6 +6409,8 @@ function handlePersonalWindowFocus() {
 }
 
 .personal-profile-panel {
+  max-height: 45%;
+  overflow-y: auto;
   position: absolute;
   top: 16px;
   left: 16px;
@@ -6340,6 +6422,8 @@ function handlePersonalWindowFocus() {
   background: var(--td-bg-color-container);
   box-shadow: var(--td-shadow-1);
 }
+
+.recommendation-legend-ring { border: 2px dashed var(--td-warning-color); border-radius: 50%; color: var(--td-warning-color); padding: 0 3px; }
 
 .personal-profile-heading,
 .personal-evidence-status-row,
