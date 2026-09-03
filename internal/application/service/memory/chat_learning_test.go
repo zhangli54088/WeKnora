@@ -14,12 +14,14 @@ import (
 
 type chatLearningMessageRepoStub struct {
 	interfaces.MessageRepository
-	message *types.Message
+	message  *types.Message
+	contexts []context.Context
 }
 
 func (s *chatLearningMessageRepoStub) GetMessage(
-	_ context.Context, sessionID, messageID string,
+	ctx context.Context, sessionID, messageID string,
 ) (*types.Message, error) {
+	s.contexts = append(s.contexts, ctx)
 	if s.message != nil && s.message.SessionID == sessionID && s.message.ID == messageID {
 		return s.message, nil
 	}
@@ -51,15 +53,16 @@ type chatLearningProfileStub struct {
 type chatLearningProfileCall struct {
 	sessionID, messageID, knowledgeBaseID string
 	candidates                            []*types.MemoryWikiCandidate
+	ctx                                   context.Context
 }
 
 func (s *chatLearningProfileStub) RecordChatInteractions(
-	_ context.Context, sessionID, messageID, knowledgeBaseID string,
+	ctx context.Context, sessionID, messageID, knowledgeBaseID string,
 	candidates []*types.MemoryWikiCandidate,
 ) error {
 	s.calls = append(s.calls, chatLearningProfileCall{
 		sessionID: sessionID, messageID: messageID, knowledgeBaseID: knowledgeBaseID,
-		candidates: candidates,
+		candidates: candidates, ctx: ctx,
 	})
 	return s.err
 }
@@ -148,6 +151,8 @@ func TestChatLearningSchedulePayloadUsesStableReferencesWithoutPrompt(t *testing
 	require.Equal(t, "session-1", raw["session_id"])
 	require.NotContains(t, raw, "content")
 	require.NotContains(t, raw, "prompt")
+	require.NotContains(t, raw, "tenant")
+	require.NotContains(t, raw, "tenant_info")
 }
 
 func TestChatLearningWorkerLoadsOnlyPersistedUserMessage(t *testing.T) {
@@ -156,6 +161,10 @@ func TestChatLearningWorkerLoadsOnlyPersistedUserMessage(t *testing.T) {
 	}}
 	profile := &chatLearningProfileStub{}
 	svc := &chatLearningService{
+		tenantRepo: &chatLearningTenantRepoStub{tenant: &types.Tenant{ID: 1}},
+		sessionRepo: &chatLearningSessionRepoStub{session: &types.Session{
+			ID: "session-1", TenantID: 1, UserID: "alice",
+		}},
 		messageRepo: &chatLearningMessageRepoStub{message: &types.Message{
 			ID: "message-1", SessionID: "session-1", Role: "user", Content: "Mamba",
 		}},

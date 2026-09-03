@@ -22,6 +22,8 @@ const (
 
 type chatLearningService struct {
 	messageRepo interfaces.MessageRepository
+	tenantRepo  interfaces.TenantRepository
+	sessionRepo interfaces.SessionRepository
 	mapper      interfaces.MemoryWikiService
 	profile     interfaces.LearningProfileService
 	enqueuer    interfaces.TaskEnqueuer
@@ -29,12 +31,16 @@ type chatLearningService struct {
 
 func NewChatLearningService(
 	messageRepo interfaces.MessageRepository,
+	tenantRepo interfaces.TenantRepository,
+	sessionRepo interfaces.SessionRepository,
 	mapper interfaces.MemoryWikiService,
 	profile interfaces.LearningProfileService,
 	enqueuer interfaces.TaskEnqueuer,
 ) interfaces.ChatLearningService {
 	return &chatLearningService{
 		messageRepo: messageRepo,
+		tenantRepo:  tenantRepo,
+		sessionRepo: sessionRepo,
 		mapper:      mapper,
 		profile:     profile,
 		enqueuer:    enqueuer,
@@ -149,6 +155,58 @@ func (s *chatLearningService) Handle(ctx context.Context, task *asynq.Task) erro
 	ctx = types.WithPrincipal(ctx, principal)
 	if payload.Language != "" {
 		ctx = context.WithValue(ctx, types.LanguageContextKey, payload.Language)
+	}
+	// Follow the summary-refresh worker pattern: reload current tenant settings
+	// instead of serializing them in the task or reusing a resource-tenant context.
+	if s.tenantRepo == nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "tenant_context_restore_failed",
+		}, "[chat-learning] tenant_context_restore_failed")
+		return fmt.Errorf("chat learning tenant repository is unavailable")
+	}
+	tenant, err := s.tenantRepo.GetTenantByID(ctx, payload.TenantID)
+	if err != nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "tenant_context_restore_failed", "error": err.Error(),
+		}, "[chat-learning] tenant_context_restore_failed")
+		return fmt.Errorf("load chat learning tenant: %w", err)
+	}
+	if tenant == nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "tenant_not_found",
+		}, "[chat-learning] tenant_context_restore_failed")
+		return fmt.Errorf("chat learning tenant %d not found", payload.TenantID)
+	}
+	if tenant.ID != payload.TenantID {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "invalid_task_scope",
+		}, "[chat-learning] worker_skip")
+		return nil
+	}
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenant)
+	logger.Info(logCtx, "[chat-learning] tenant_context_restored")
+
+	// GetMessage is scoped only by session/message IDs. Bind the durable session
+	// to the profile tenant before loading its content; a KB's owner is not the
+	// profile owner. Principal/subject consistency is checked above.
+	if s.sessionRepo == nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "session_load_failed",
+		}, "[chat-learning] session_load_failed")
+		return fmt.Errorf("chat learning session repository is unavailable")
+	}
+	session, err := s.sessionRepo.GetByID(ctx, payload.TenantID, payload.SessionID)
+	if err != nil {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "session_load_failed", "error": err.Error(),
+		}, "[chat-learning] session_load_failed")
+		return fmt.Errorf("load chat learning session: %w", err)
+	}
+	if session == nil || session.TenantID != payload.TenantID || session.ID != payload.SessionID {
+		logger.WarnWithFields(logCtx, logger.Fields{
+			"skip_reason": "invalid_task_scope",
+		}, "[chat-learning] worker_skip")
+		return nil
 	}
 	message, err := s.messageRepo.GetMessage(ctx, payload.SessionID, payload.MessageID)
 	if err != nil {
