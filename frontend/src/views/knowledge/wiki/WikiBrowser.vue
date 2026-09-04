@@ -17,6 +17,7 @@
               <template #icon><t-icon name="refresh" /></template>
               {{ $t('knowledgeEditor.wikiBrowser.profileRefresh') }}
             </t-button>
+            <LearningProfileActions @cleared="onLearningProfileCleared" />
           </div>
           <div class="personal-profile-counts">
             <span>{{ $t('knowledgeEditor.wikiBrowser.profileLit') }} <strong>{{ personalSummary.lit }}</strong></span>
@@ -41,7 +42,7 @@
             <t-link theme="primary" @click="refreshPersonalProfile">{{ $t('common.retry') }}</t-link>
           </div>
           <div v-else-if="!personalStatesLoading && personalSummary.lit === 0" class="personal-profile-empty">
-            {{ $t('knowledgeEditor.wikiBrowser.profileNoEvidence') }}
+            {{ $t('learningProfileData.empty') }}
           </div>
           <LearningRecommendationPanel :items="activeRecommendations" :loading="recommendationsLoading"
             :failed="recommendationsFailed" :wiki-enabled="recommendationView?.wiki_enabled ?? true"
@@ -906,6 +907,8 @@ import { filterPersonalKnowledgeGraph, mergePersonalKnowledgeGraph, summarizeKno
 import { createRecommendationLoader, mergeRecommendationGraph, selectLearningRecommendation } from './learningRecommendations'
 import LearningRecommendationPanel from './LearningRecommendationPanel.vue'
 import LearningRecommendationDetails from './LearningRecommendationDetails.vue'
+import LearningProfileActions from './LearningProfileActions.vue'
+import { createProfileRequestGuard } from './learningProfileActions'
 import {
   expandedWikiDirectoryPaths,
   expandWikiDirectoryPath,
@@ -1133,6 +1136,33 @@ const graphReady = ref(false)
 const showArrows = ref(true)
 
 let personalStatesRequest = 0
+const personalEvidenceRequests = createProfileRequestGuard()
+
+async function onLearningProfileCleared() {
+  personalDebug.value = false
+  // Invalidate old responses before clearing local projections. The public
+  // graphData and graph layout are retained; only personal overlays disappear.
+  personalStatesRequest++
+  personalEvidenceRequests.invalidate()
+  recommendationLoader.invalidate()
+  personalStates.value = []
+  personalStatesLoading.value = false
+  personalStatesError.value = false
+  personalEvidence.value = []
+  personalEvidenceLoading.value = false
+  personalEvidenceError.value = false
+  recommendationView.value = null
+  recommendationsLoading.value = false
+  recommendationsFailed.value = false
+  personalLastUpdated.value = ''
+  personalFilters.query = ''
+  personalFilters.status = 'all'
+  personalFilters.litOnly = false
+  personalFilters.recommendedOnly = false
+  renderGraph({ preserveLayout: true })
+  await refreshPersonalProfile()
+}
+
 async function loadPersonalStates() {
   if (!isPersonalProfile.value || !props.knowledgeBaseId) return
   const request = ++personalStatesRequest
@@ -1183,19 +1213,22 @@ async function selectRecommendation(item: LearningRecommendation) {
 }
 
 async function loadSelectedEvidence() {
+  const request = personalEvidenceRequests.start()
   const pageID = graphDrawerPage.value?.id
+  const kbID = props.knowledgeBaseId
   if (!pageID || !isPersonalProfile.value) return
   personalEvidenceLoading.value = true
   personalEvidenceError.value = false
   try {
     const response = await listLearningEvidence(pageID)
+    if (!personalEvidenceRequests.current(request) || pageID !== graphDrawerPage.value?.id || kbID !== props.knowledgeBaseId || !isPersonalProfile.value) return
     personalEvidence.value = response.data || []
   } catch (error) {
-    console.error(`Failed to load learning evidence for ${pageID}:`, error)
+    if (!personalEvidenceRequests.current(request) || pageID !== graphDrawerPage.value?.id || kbID !== props.knowledgeBaseId || !isPersonalProfile.value) return
     personalEvidenceError.value = true
     personalEvidence.value = []
   } finally {
-    personalEvidenceLoading.value = false
+    if (personalEvidenceRequests.current(request)) personalEvidenceLoading.value = false
   }
 }
 
@@ -5131,6 +5164,7 @@ watch(searchQuery, (val) => {
 })
 
 watch(() => props.view, (v) => {
+  personalEvidenceRequests.invalidate()
   recommendationLoader.invalidate()
   if (v === 'graph' || v === 'profile') {
     loadGraph()
@@ -5163,6 +5197,11 @@ onMounted(() => {
 })
 
 watch(() => props.knowledgeBaseId, () => {
+  personalStatesRequest++
+  personalEvidenceRequests.invalidate()
+  personalEvidence.value = []
+  personalEvidenceLoading.value = false
+  personalEvidenceError.value = false
   recommendationLoader.invalidate()
   recommendationView.value = null
   recommendationsFailed.value = false
@@ -5171,6 +5210,9 @@ watch(() => props.knowledgeBaseId, () => {
 })
 
 onUnmounted(() => {
+  personalStatesRequest++
+  personalEvidenceRequests.invalidate()
+  recommendationLoader.invalidate()
   window.removeEventListener('focus', handlePersonalWindowFocus)
   if (statsTimer) {
     clearInterval(statsTimer)
@@ -6439,6 +6481,10 @@ function handlePersonalWindowFocus() {
   color: var(--td-text-color-primary);
   font-size: 15px;
   font-weight: 600;
+}
+
+.personal-profile-heading {
+  flex-wrap: wrap;
 }
 
 .personal-profile-updated,

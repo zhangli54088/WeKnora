@@ -31,6 +31,14 @@ type learningProfileHandlerServiceFake struct {
 	stateErr        error
 }
 
+func (s *learningProfileHandlerServiceFake) ExportProfile(context.Context) (*types.LearningProfileExport, error) {
+	return nil, nil
+}
+
+func (s *learningProfileHandlerServiceFake) ClearProfile(context.Context) (*types.LearningProfileDeleteResult, error) {
+	return nil, nil
+}
+
 func (s *learningProfileHandlerServiceFake) SyncMemoryWikiLink(
 	context.Context, *types.MemoryWikiLink,
 ) error {

@@ -25,6 +25,11 @@ func (s MemoryScope) Valid() bool {
 // worker cannot accidentally operate on whatever the ambient context happens
 // to hold.
 type MemoryRepository interface {
+	// WithLearningCleanup binds both repositories to one deletion transaction.
+	// It removes only memory-link evidence and passes deduplicated affected page
+	// IDs to fn for existing service aggregation and item deletion. Empty itemID
+	// means a scoped bulk clear; chat and other evidence sources are preserved.
+	WithLearningCleanup(ctx context.Context, scope MemoryScope, itemID string, fn func(MemoryRepository, LearningProfileRepository, []string) error) error
 	// GetSubject returns the memory space, or (nil, nil) when it does not exist.
 	GetSubject(ctx context.Context, scope MemoryScope) (*types.MemorySubject, error)
 	// EnsureSubject returns the memory space, creating it on first use.

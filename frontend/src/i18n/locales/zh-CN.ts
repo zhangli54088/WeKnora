@@ -1,4 +1,15 @@
 export default {
+  learningProfileData: {
+    export: '导出学习画像',
+    more: '更多',
+    delete: '删除学习画像',
+    confirmBody: '将删除当前账号在当前工作空间内的全部学习证据、节点状态和 Memory-Wiki 关联（不限于当前知识库）。不会删除长期记忆、知识库（KB）文档、Wiki 页面、公共知识图谱或其他用户的数据。此操作不可撤销；继续对话后可能重新建立学习画像。',
+    exportSuccess: '学习画像已导出',
+    exportFailed: '导出失败，请重试。知识图谱仍可使用。',
+    deleteSuccess: '学习画像已删除，长期记忆与公共知识图谱已保留',
+    deleteFailed: '删除失败，请重试。当前知识图谱未受影响。',
+    empty: '当前还没有学习画像。继续与该知识库交流后，相关节点会重新点亮。',
+  },
   learningRecommendation: {
     title: "下一步学习建议",
     score: "推荐度 {score}%",

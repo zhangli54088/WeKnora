@@ -1,4 +1,15 @@
 export default {
+  learningProfileData: {
+    export: 'Export learning profile',
+    more: 'More',
+    delete: 'Delete learning profile',
+    confirmBody: 'Delete all learning evidence, node states and Memory-Wiki links for your account in this workspace, across all knowledge bases. This will NOT delete long-term memories, knowledge base (KB) documents, Wiki pages, the public knowledge graph or other users’ data. This cannot be undone; future conversations may rebuild your profile.',
+    exportSuccess: 'Learning profile exported',
+    exportFailed: 'Export failed. Please retry; the graph is still available.',
+    deleteSuccess: 'Learning profile deleted. Memories and the public graph are preserved.',
+    deleteFailed: 'Deletion failed. Please retry; the graph is unaffected.',
+    empty: 'No learning profile yet. Continue chatting with this knowledge base to light up related nodes again.',
+  },
   learningRecommendation: {
     title: "Next steps",
     score: "Recommendation score {score}%",

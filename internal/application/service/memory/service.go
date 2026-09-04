@@ -780,7 +780,14 @@ func (s *Service) DeleteItem(ctx context.Context, id string) error {
 	); err != nil {
 		logger.Warnf(ctx, "memory: record tombstone failed: %v", err)
 	}
-	if err := s.repo.DeleteItem(ctx, scope, id); err != nil {
+	if err := s.repo.WithLearningCleanup(ctx, scope, id, func(txMemory interfaces.MemoryRepository, txProfile interfaces.LearningProfileRepository, pages []string) error {
+		for _, pageID := range pages {
+			if _, err := recomputeKnowledgeStateWithRepo(ctx, txProfile, scope, pageID); err != nil {
+				return err
+			}
+		}
+		return txMemory.DeleteItem(ctx, scope, id)
+	}); err != nil {
 		return err
 	}
 	s.rebuildBlock(ctx, scope)
@@ -796,14 +803,24 @@ func (s *Service) Clear(ctx context.Context) (int64, error) {
 	// Clearing is a rejection of everything currently stored, so it leaves the
 	// same tombstones an individual delete would.
 	s.tombstoneEverything(ctx, scope)
-	removed, err := s.repo.DeleteAll(ctx, scope)
+	var removed int64
+	err = s.repo.WithLearningCleanup(ctx, scope, "", func(txMemory interfaces.MemoryRepository, txProfile interfaces.LearningProfileRepository, pages []string) error {
+		for _, pageID := range pages {
+			if _, err := recomputeKnowledgeStateWithRepo(ctx, txProfile, scope, pageID); err != nil {
+				return err
+			}
+		}
+		var deleteErr error
+		removed, deleteErr = txMemory.DeleteAll(ctx, scope)
+		if deleteErr != nil {
+			return deleteErr
+		}
+		if err := txMemory.DeleteAllTopics(ctx, scope); err != nil {
+			return err
+		}
+		return txMemory.DeleteAllDocAffinity(ctx, scope)
+	})
 	if err != nil {
-		return 0, err
-	}
-	if err := s.repo.DeleteAllTopics(ctx, scope); err != nil {
-		return 0, err
-	}
-	if err := s.repo.DeleteAllDocAffinity(ctx, scope); err != nil {
 		return 0, err
 	}
 	s.rebuildBlock(ctx, scope)

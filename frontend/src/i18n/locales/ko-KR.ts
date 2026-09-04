@@ -1,4 +1,15 @@
 export default {
+  learningProfileData: {
+    export: '학습 프로필 내보내기',
+    more: '더 보기',
+    delete: '학습 프로필 삭제',
+    confirmBody: '현재 워크스페이스의 모든 지식 베이스에서 내 계정의 학습 근거, 노드 상태 및 Memory-Wiki 연결을 삭제합니다. 장기 기억, 지식 베이스(KB) 문서, Wiki 페이지, 공용 지식 그래프 및 다른 사용자의 데이터는 삭제하지 않습니다. 되돌릴 수 없으며 이후 대화로 프로필이 다시 생성될 수 있습니다.',
+    exportSuccess: '학습 프로필을 내보냈습니다',
+    exportFailed: '내보내지 못했습니다. 다시 시도하세요. 그래프는 계속 사용할 수 있습니다.',
+    deleteSuccess: '학습 프로필을 삭제했습니다. 기억과 공용 그래프는 유지됩니다.',
+    deleteFailed: '삭제하지 못했습니다. 다시 시도하세요. 그래프에는 영향이 없습니다.',
+    empty: '아직 학습 프로필이 없습니다. 이 지식 베이스와 계속 대화하면 관련 노드가 다시 활성화됩니다.',
+  },
   learningRecommendation: {
     title: "다음 학습 제안",
     score: "추천 점수 {score}%",

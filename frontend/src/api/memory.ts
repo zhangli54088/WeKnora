@@ -205,6 +205,34 @@ export function exportMemoryItems() {
   return get<{ success: boolean; total: number; data: MemoryItem[] }>('/api/v1/memory/export')
 }
 
+export interface LearningProfileExport {
+  version: number
+  exported_at: string
+  scope: { tenant_id: number; subject_id: string }
+  memory: { items: MemoryItem[]; topics: unknown[]; documents: unknown[] }
+  learning_profile: {
+    memory_wiki_links: unknown[]
+    learning_evidences: Array<Pick<LearningEvidence, 'id' | 'wiki_page_id' | 'evidence_type' | 'level' | 'source_type' | 'source_id' | 'weight' | 'occurred_at' | 'metadata'>>
+    knowledge_states: Array<UserKnowledgeState & { created_at: string }>
+  }
+}
+
+export interface LearningProfileDeleteResult {
+  memory_wiki_links_deleted: number
+  learning_evidences_deleted: number
+  knowledge_states_deleted: number
+}
+
+export function exportLearningProfile() {
+  return get<{ success: boolean; data: LearningProfileExport }>(
+    '/api/v1/memory/export?include_learning_profile=true',
+  )
+}
+
+export function deleteLearningProfile() {
+  return del<{ success: boolean; data: LearningProfileDeleteResult }>('/api/v1/memory/learning-profile')
+}
+
 /** Why a review changed nothing. Empty when it did change something. */
 export type MemoryConsolidationSkip =
   | 'too_few_items'

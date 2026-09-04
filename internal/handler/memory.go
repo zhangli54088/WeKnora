@@ -404,6 +404,11 @@ func (h *MemoryHandler) Clear(c *gin.Context) {
 // @Security     Bearer
 // @Router       /memory/export [get]
 func (h *MemoryHandler) Export(c *gin.Context) {
+	// Opt-in preserves the legacy item-only response used by MemorySettings.
+	if c.Query("include_learning_profile") == "true" {
+		h.ExportLearningProfile(c)
+		return
+	}
 	ctx := c.Request.Context()
 	// Export is a snapshot, not a page, so it walks every status to the end.
 	//
