@@ -1,0 +1,15 @@
+version: 1
+student:
+  name: "赵吉祥"
+  github_id: "129730885"
+topic:
+  id: "4"
+  title: "WeKnora知识网络与引导式学习"
+result:
+  type: code
+  url: "https://github.com/zhangli54088/WeKnora"
+repository:
+  url: "https://github.com/zhangli54088/WeKnora.git"
+  branch: "feature/guided-learning"
+  commit: "a27c26b5285b931fdd074fe5b913bfa5b3948124"
+  tag: "rhino-2026-final-4"
